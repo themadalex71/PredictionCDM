@@ -17,8 +17,9 @@ export function SettingsPage({ settings, onSettingsChange }: SettingsPageProps) 
           <h2>Paramètres futurs</h2>
         </div>
         <p>
-          Tu pourras ajouter un coefficient Elo/FIFA, une force d'effectif, des absences, la fatigue du calendrier,
-          ou encore des réglages différents selon phase de poule / phase finale.
+          Le modèle intègre maintenant Elo, température et Dixon-Coles. Les prochaines grosses améliorations seront
+          l’ajout de données xG, de valeur d’effectif, d’absences/blessures et de réglages différents selon phase de
+          poule / phase finale.
         </p>
       </section>
     </div>

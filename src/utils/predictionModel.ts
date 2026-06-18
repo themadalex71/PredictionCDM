@@ -6,7 +6,7 @@ import type {
   ScorePrediction,
 } from '../types/football';
 import { getEloComparison as getInternalEloComparison } from './eloModel';
-import { getExternalEloComparison } from './externalEloModel';
+import { getExternalEloComparison, getExternalEloRating } from './externalEloModel';
 
 type ExpectedGoals = {
   teamA: number;
@@ -55,6 +55,18 @@ type TeamProfile = {
   momentumMultiplier: number;
 };
 
+type ScoreModelKind =
+  | 'independent_poisson'
+  | 'dixon_coles'
+  | 'bivariate_poisson'
+  | 'hybrid_dc_bivariate';
+
+type ScoreCalibrationKind =
+  | 'none'
+  | 'conservative'
+  | 'classic_top1'
+  | 'worldcup_prudent';
+
 type CalibrationSettings = {
   favoriteShrinkBase: number;
   favoriteShrinkClose: number;
@@ -63,9 +75,26 @@ type CalibrationSettings = {
   drawBoostCloseMatch: number;
   drawBoostLowTotal: number;
   drawBoostMax: number;
+  drawMultiplier: number;
+  lowScoreDrawBoost: number;
+  smartDrawBoost: boolean;
+  smartDrawFavoritePenalty: number;
+  smartDrawMaxBoost: number;
   externalEloImpact: number;
   internalEloImpact: number;
   scoreTemperature: number;
+  useDixonColes: boolean;
+  dixonColesRho: number;
+  dixonColesWeight: number;
+  scoreModel: ScoreModelKind;
+  adaptiveDixonColes: boolean;
+  bivariateSharedLambda: number;
+  bivariateBlendWeight: number;
+  advancedCompetitionWeights: boolean;
+  opponentEloAdjustmentWeight: number;
+  dataConfidenceWeight: number;
+  scoreCalibration: ScoreCalibrationKind;
+  favoriteControlWeight: number;
 };
 
 const MIN_EXPECTED_GOALS = 0.12;
@@ -85,12 +114,29 @@ const DEFAULT_CALIBRATION: CalibrationSettings = {
   favoriteShrinkClose: 1,
   favoriteShrinkMedium: 1,
   drawBoostBase: 1,
-  drawBoostCloseMatch: 0,
-  drawBoostLowTotal: 0,
-  drawBoostMax: 1,
+  drawBoostCloseMatch: 0.04,
+  drawBoostLowTotal: 0.03,
+  drawBoostMax: 1.22,
+  drawMultiplier: 1.06,
+  lowScoreDrawBoost: 0.06,
+  smartDrawBoost: true,
+  smartDrawFavoritePenalty: 0.75,
+  smartDrawMaxBoost: 1.22,
   externalEloImpact: 0.35,
   internalEloImpact: 0.35,
   scoreTemperature: 1,
+  useDixonColes: true,
+  dixonColesRho: -0.08,
+  dixonColesWeight: 1,
+  scoreModel: 'hybrid_dc_bivariate',
+  adaptiveDixonColes: true,
+  bivariateSharedLambda: 0.08,
+  bivariateBlendWeight: 0.25,
+  advancedCompetitionWeights: true,
+  opponentEloAdjustmentWeight: 0.45,
+  dataConfidenceWeight: 1.2,
+  scoreCalibration: 'classic_top1',
+  favoriteControlWeight: 0.18,
 };
 
 function getCalibration(settings: ModelSettings): CalibrationSettings {
@@ -107,17 +153,103 @@ function getCalibration(settings: ModelSettings): CalibrationSettings {
     drawBoostLowTotal:
       settings.drawBoostLowTotal ?? DEFAULT_CALIBRATION.drawBoostLowTotal,
     drawBoostMax: settings.drawBoostMax ?? DEFAULT_CALIBRATION.drawBoostMax,
+    drawMultiplier:
+      settings.drawMultiplier ?? DEFAULT_CALIBRATION.drawMultiplier,
+    lowScoreDrawBoost:
+      settings.lowScoreDrawBoost ?? DEFAULT_CALIBRATION.lowScoreDrawBoost,
+    smartDrawBoost:
+      settings.smartDrawBoost ?? DEFAULT_CALIBRATION.smartDrawBoost,
+    smartDrawFavoritePenalty:
+      settings.smartDrawFavoritePenalty ?? DEFAULT_CALIBRATION.smartDrawFavoritePenalty,
+    smartDrawMaxBoost:
+      settings.smartDrawMaxBoost ?? DEFAULT_CALIBRATION.smartDrawMaxBoost,
     externalEloImpact:
       settings.externalEloImpact ?? DEFAULT_CALIBRATION.externalEloImpact,
     internalEloImpact:
       settings.internalEloImpact ?? DEFAULT_CALIBRATION.internalEloImpact,
     scoreTemperature:
       settings.scoreTemperature ?? DEFAULT_CALIBRATION.scoreTemperature,
+    useDixonColes:
+      settings.useDixonColes ?? DEFAULT_CALIBRATION.useDixonColes,
+    dixonColesRho:
+      settings.dixonColesRho ?? DEFAULT_CALIBRATION.dixonColesRho,
+    dixonColesWeight:
+      settings.dixonColesWeight ?? DEFAULT_CALIBRATION.dixonColesWeight,
+    scoreModel: settings.scoreModel ?? DEFAULT_CALIBRATION.scoreModel,
+    adaptiveDixonColes:
+      settings.adaptiveDixonColes ?? DEFAULT_CALIBRATION.adaptiveDixonColes,
+    bivariateSharedLambda:
+      settings.bivariateSharedLambda ?? DEFAULT_CALIBRATION.bivariateSharedLambda,
+    bivariateBlendWeight:
+      settings.bivariateBlendWeight ?? DEFAULT_CALIBRATION.bivariateBlendWeight,
+    advancedCompetitionWeights:
+      settings.advancedCompetitionWeights ?? DEFAULT_CALIBRATION.advancedCompetitionWeights,
+    opponentEloAdjustmentWeight:
+      settings.opponentEloAdjustmentWeight ?? DEFAULT_CALIBRATION.opponentEloAdjustmentWeight,
+    dataConfidenceWeight:
+      settings.dataConfidenceWeight ?? DEFAULT_CALIBRATION.dataConfidenceWeight,
+    scoreCalibration:
+      settings.scoreCalibration ?? DEFAULT_CALIBRATION.scoreCalibration,
+    favoriteControlWeight:
+      settings.favoriteControlWeight ?? DEFAULT_CALIBRATION.favoriteControlWeight,
   };
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function getDataReliability(
+  weightedMatches: number,
+  rawMatches: number,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+  const volumeReliability = Math.sqrt(Math.max(0, weightedMatches) / 30);
+  const rawVolumeReliability = Math.sqrt(Math.max(0, rawMatches) / 12);
+  const blendedReliability = clamp(
+    volumeReliability * 0.72 + rawVolumeReliability * 0.28,
+    0,
+    1
+  );
+
+  // Si dataConfidenceWeight > 1, les équipes avec peu de matchs sont davantage
+  // ramenées vers la moyenne. Cela évite de sur-interpréter 3 ou 4 matchs récents.
+  return clamp(
+    Math.pow(blendedReliability, clamp(calibration.dataConfidenceWeight, 0.45, 2.4)),
+    0,
+    1
+  );
+}
+
+function getExternalTeamQualityMultiplier(
+  team: string,
+  referenceDate: string | undefined,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+  const weight = clamp(calibration.opponentEloAdjustmentWeight, 0, 1.5);
+
+  if (weight <= 0) {
+    return 1;
+  }
+
+  const rating = getExternalEloRating(team, {
+    neutral: true,
+    teamAIsHome: true,
+    predictionDate: referenceDate,
+  });
+
+  if (!rating) {
+    return 1;
+  }
+
+  // Le centre de gravité du fichier Elo est proche de 1690.
+  // Une équipe très forte rend les buts marqués contre elle plus précieux ;
+  // à l'inverse, concéder contre elle est un peu moins grave.
+  const normalizedQuality = clamp((rating.rating - 1690) / 520, -1.25, 1.25);
+
+  return clamp(Math.exp(normalizedQuality * 0.34 * weight), 0.72, 1.38);
 }
 
 function factorial(n: number): number {
@@ -168,6 +300,7 @@ function getTournamentWeight(
   tournament: string,
   settings: ModelSettings
 ): number {
+  const calibration = getCalibration(settings);
   const normalized = tournament.toLowerCase();
 
   const isFriendly =
@@ -198,27 +331,78 @@ function getTournamentWeight(
 
   const isNationsLeague = normalized.includes('nations league');
 
+  if (!calibration.advancedCompetitionWeights) {
+    if (isWorldCupFinalTournament) {
+      return Math.max(1.85, settings.officialMatchWeight);
+    }
+
+    if (isContinentalCompetition) {
+      return Math.max(1.45, settings.officialMatchWeight * 0.95);
+    }
+
+    if (isQualification) {
+      return Math.max(1.25, settings.officialMatchWeight * 0.8);
+    }
+
+    if (isNationsLeague) {
+      return Math.max(1.1, settings.officialMatchWeight * 0.65);
+    }
+
+    if (isFriendly) {
+      return 0.6;
+    }
+
+    return 1;
+  }
+
+  // Nouvelle logique : on filtre beaucoup mieux la qualité des compétitions.
+  // Les résultats de Coupe du Monde / qualifications / vraies coupes continentales
+  // doivent structurer le niveau d'équipe. Les petits tournois amicaux ou séries
+  // servent seulement de signal secondaire.
+  const isSmallInvitational =
+    normalized.includes('fifa series') ||
+    normalized.includes('concacaf series') ||
+    normalized.includes('mukuru') ||
+    normalized.includes('tri-nations') ||
+    normalized.includes('tri nations') ||
+    normalized.includes('4 nations') ||
+    normalized.includes('four nations') ||
+    normalized.includes('unity cup') ||
+    normalized.includes('diamond jubilee') ||
+    normalized.includes('capital of african football') ||
+    normalized.includes('baltic cup') ||
+    normalized.includes('kirin') ||
+    normalized.includes('king cup') ||
+    normalized.includes('tournament');
+
   if (isWorldCupFinalTournament) {
-    return Math.max(1.85, settings.officialMatchWeight);
+    return Math.max(2.05, settings.officialMatchWeight * 1.15);
+  }
+
+  if (isQualification) {
+    return Math.max(1.35, settings.officialMatchWeight * 0.85);
   }
 
   if (isContinentalCompetition) {
     return Math.max(1.45, settings.officialMatchWeight * 0.95);
   }
 
-  if (isQualification) {
-    return Math.max(1.25, settings.officialMatchWeight * 0.8);
+  if (isNationsLeague) {
+    return Math.max(1.05, settings.officialMatchWeight * 0.62);
   }
 
-  if (isNationsLeague) {
-    return Math.max(1.1, settings.officialMatchWeight * 0.65);
+  if (isSmallInvitational) {
+    if (normalized.includes('baltic cup')) return 0.7;
+    if (normalized.includes('fifa series')) return 0.68;
+    if (normalized.includes('concacaf series')) return 0.72;
+    return 0.52;
   }
 
   if (isFriendly) {
-    return 0.6;
+    return 0.5;
   }
 
-  return 1;
+  return 0.82;
 }
 
 function getMatchWeight(
@@ -384,7 +568,11 @@ function computeBaseTeamStrengths(
         ? goalsAgainstPerMatch / globalProfile.avgGoalsPerTeam
         : 1;
 
-    const reliability = clamp(Math.sqrt(record.weightedMatches / 30), 0, 1);
+    const reliability = getDataReliability(
+      record.weightedMatches,
+      record.rawMatches,
+      settings
+    );
 
     strengths.set(team, {
       team,
@@ -427,15 +615,26 @@ function computeOpponentAdjustedTeamProfile(
 
     const opponentDefenseWeakness = opponentStrength?.defenseWeakness ?? 1;
     const opponentAttackStrength = opponentStrength?.attackStrength ?? 1;
+    const opponentQualityMultiplier = getExternalTeamQualityMultiplier(
+      opponent,
+      match.date,
+      settings
+    );
 
     const weight = getMatchWeight(match, settings, referenceDate);
     const { goalsFor, goalsAgainst } = getGoalsForTeam(match, team);
 
     weightedAdjustedGoalsFor +=
-      (goalsFor / clamp(opponentDefenseWeakness, 0.55, 1.9)) * weight;
+      (goalsFor /
+        clamp(opponentDefenseWeakness, 0.55, 1.9) *
+        opponentQualityMultiplier) *
+      weight;
 
     weightedAdjustedGoalsAgainst +=
-      (goalsAgainst / clamp(opponentAttackStrength, 0.55, 1.9)) * weight;
+      (goalsAgainst /
+        clamp(opponentAttackStrength, 0.55, 1.9) /
+        opponentQualityMultiplier) *
+      weight;
 
     totalWeight += weight;
   }
@@ -463,15 +662,26 @@ function computeOpponentAdjustedTeamProfile(
 
     const opponentDefenseWeakness = opponentStrength?.defenseWeakness ?? 1;
     const opponentAttackStrength = opponentStrength?.attackStrength ?? 1;
+    const opponentQualityMultiplier = getExternalTeamQualityMultiplier(
+      opponent,
+      match.date,
+      settings
+    );
 
     const weight = getMatchWeight(match, settings, referenceDate);
     const { goalsFor, goalsAgainst } = getGoalsForTeam(match, team);
 
     recentAdjustedGoalsFor +=
-      (goalsFor / clamp(opponentDefenseWeakness, 0.55, 1.9)) * weight;
+      (goalsFor /
+        clamp(opponentDefenseWeakness, 0.55, 1.9) *
+        opponentQualityMultiplier) *
+      weight;
 
     recentAdjustedGoalsAgainst +=
-      (goalsAgainst / clamp(opponentAttackStrength, 0.55, 1.9)) * weight;
+      (goalsAgainst /
+        clamp(opponentAttackStrength, 0.55, 1.9) /
+        opponentQualityMultiplier) *
+      weight;
 
     recentWeightedPoints += getResultPoints(match, team) * weight;
     recentWeight += weight;
@@ -510,7 +720,11 @@ function computeOpponentAdjustedTeamProfile(
       ? blendedGoalsAgainst / globalProfile.avgGoalsPerTeam
       : 1;
 
-  const reliability = clamp(Math.sqrt(totalWeight / 30), 0, 1);
+  const reliability = getDataReliability(
+    totalWeight,
+    teamMatches.length,
+    settings
+  );
 
   const momentumMultiplier = clamp(
     1 + (recentPointsRatio - 0.5) * recentFormWeight * 0.45,
@@ -777,36 +991,90 @@ function dixonColesAdjustment(
   lambdaAway: number,
   rho: number
 ): number {
+  const safeLambdaHome = clamp(lambdaHome, 0.05, 5.5);
+  const safeLambdaAway = clamp(lambdaAway, 0.05, 5.5);
+
   if (homeGoals === 0 && awayGoals === 0) {
-    return clamp(1 - lambdaHome * lambdaAway * rho, 0.65, 1.35);
+    return clamp(1 - safeLambdaHome * safeLambdaAway * rho, 0.45, 1.75);
   }
 
   if (homeGoals === 0 && awayGoals === 1) {
-    return clamp(1 + lambdaHome * rho, 0.65, 1.35);
+    return clamp(1 + safeLambdaHome * rho, 0.45, 1.75);
   }
 
   if (homeGoals === 1 && awayGoals === 0) {
-    return clamp(1 + lambdaAway * rho, 0.65, 1.35);
+    return clamp(1 + safeLambdaAway * rho, 0.45, 1.75);
   }
 
   if (homeGoals === 1 && awayGoals === 1) {
-    return clamp(1 - rho, 0.65, 1.35);
+    return clamp(1 - rho, 0.45, 1.75);
   }
 
   return 1;
 }
 
-function getDixonColesRho(context: PredictionContext): number {
-  const tournament = context.tournament?.toLowerCase() ?? '';
+function getAdaptiveDixonColesRho(
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+  const baseRho = clamp(calibration.dixonColesRho, -0.35, 0.25);
 
-  if (tournament.includes('world cup')) {
-    return -0.06;
+  if (!calibration.adaptiveDixonColes) {
+    return baseRho;
   }
 
-  return -0.05;
+  const totalGoals = expectedGoals.teamA + expectedGoals.teamB;
+  const goalDiff = Math.abs(expectedGoals.teamA - expectedGoals.teamB);
+
+  let multiplier = 1;
+
+  // Les matchs serrés et plutôt fermés ont historiquement plus de faibles scores.
+  if (goalDiff < 0.25) multiplier += 0.25;
+  else if (goalDiff < 0.5) multiplier += 0.12;
+
+  if (totalGoals < 2.15) multiplier += 0.2;
+  else if (totalGoals > 3.1) multiplier -= 0.18;
+
+  // Si l'Elo dit que le match est très déséquilibré, on évite de sur-booster les nuls.
+  const effectiveEloDiff = Math.abs(expectedGoals.eloDiff) * expectedGoals.eloImpact;
+  if (effectiveEloDiff > 260) multiplier -= 0.18;
+  else if (effectiveEloDiff > 180) multiplier -= 0.08;
+
+  return clamp(baseRho * clamp(multiplier, 0.65, 1.45), -0.4, 0.3);
 }
 
-function getDrawCalibrationFactor(
+function getDixonColesFactor(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+
+  if (!calibration.useDixonColes || calibration.scoreModel === 'independent_poisson') {
+    return 1;
+  }
+
+  const rho = getAdaptiveDixonColesRho(expectedGoals, settings);
+  const weight = clamp(calibration.dixonColesWeight, 0, 1.5);
+
+  if (weight <= 0) {
+    return 1;
+  }
+
+  const rawFactor = dixonColesAdjustment(
+    homeGoals,
+    awayGoals,
+    expectedGoals.teamA,
+    expectedGoals.teamB,
+    rho
+  );
+
+  return clamp(1 + (rawFactor - 1) * weight, 0.4, 1.9);
+}
+
+function getLegacyDrawCalibrationFactor(
   homeGoals: number,
   awayGoals: number,
   expectedGoals: ExpectedGoals,
@@ -824,7 +1092,7 @@ function getDrawCalibrationFactor(
     Math.abs(expectedGoals.eloDiff) * expectedGoals.eloImpact;
   const tournament = context.tournament?.toLowerCase() ?? '';
 
-  let factor = calibration.drawBoostBase;
+  let factor = calibration.drawBoostBase * calibration.drawMultiplier;
 
   if (xgDiff < 0.25) {
     factor += calibration.drawBoostCloseMatch;
@@ -852,11 +1120,246 @@ function getDrawCalibrationFactor(
     factor += 0.03;
   }
 
+  if (homeGoals === 0) {
+    factor += calibration.lowScoreDrawBoost;
+  } else if (homeGoals === 1) {
+    factor += calibration.lowScoreDrawBoost;
+  } else if (homeGoals === 2) {
+    factor += calibration.lowScoreDrawBoost * 0.45;
+  }
+
   if (homeGoals >= 3) {
     factor *= 0.75;
   }
 
-  return clamp(factor, 1, calibration.drawBoostMax);
+  const dynamicMax = Math.max(
+    calibration.drawBoostMax,
+    calibration.drawMultiplier + calibration.lowScoreDrawBoost + 0.08
+  );
+
+  return clamp(factor, 1, dynamicMax);
+}
+
+function getSmartDrawCalibrationFactor(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings,
+  context: PredictionContext
+): number {
+  if (homeGoals !== awayGoals) {
+    return 1;
+  }
+
+  const calibration = getCalibration(settings);
+  const xgDiff = Math.abs(expectedGoals.teamA - expectedGoals.teamB);
+  const xgTotal = expectedGoals.teamA + expectedGoals.teamB;
+  const effectiveEloDiff = Math.abs(expectedGoals.eloDiff) * expectedGoals.eloImpact;
+  const tournament = context.tournament?.toLowerCase() ?? '';
+
+  // 1 = match très serré ; 0 = match avec favori clair en expected goals.
+  const closenessScore = clamp(1 - xgDiff / 0.9, 0, 1);
+
+  // 1 = match fermé ; 0 = match ouvert.
+  const lowTotalScore = clamp((2.75 - xgTotal) / 0.95, 0, 1);
+
+  // Pénalités quand un favori ressort clairement.
+  const eloFavoriteSignal = clamp((effectiveEloDiff - 115) / 230, 0, 1);
+  const xgFavoriteSignal = clamp((xgDiff - 0.42) / 0.85, 0, 1);
+  const favoriteSignal = clamp(eloFavoriteSignal * 0.58 + xgFavoriteSignal * 0.42, 0, 1);
+  const favoritePenalty = clamp(calibration.smartDrawFavoritePenalty, 0, 1.25);
+
+  let scoreSpecificWeight = 0;
+
+  if (homeGoals === 0 || homeGoals === 1) {
+    scoreSpecificWeight = 1;
+  } else if (homeGoals === 2) {
+    scoreSpecificWeight = 0.42;
+  } else {
+    scoreSpecificWeight = 0.08;
+  }
+
+  const globalDrawBoost = Math.max(0, calibration.drawMultiplier - 1);
+
+  let boost = 0;
+
+  // Les nuls ne sont boostés que si le match est serré et/ou fermé.
+  boost += globalDrawBoost * (0.25 + 0.75 * closenessScore);
+  boost += calibration.drawBoostCloseMatch * closenessScore;
+  boost += calibration.drawBoostLowTotal * lowTotalScore;
+  boost +=
+    calibration.lowScoreDrawBoost *
+    scoreSpecificWeight *
+    (0.35 + 0.65 * Math.max(closenessScore, lowTotalScore));
+
+  if (tournament.includes('world cup')) {
+    boost += 0.018 * closenessScore;
+  }
+
+  if (xgTotal > 3.05 && closenessScore < 0.45) {
+    boost *= 0.65;
+  }
+
+  // C'est la partie importante : si le match n'est pas équilibré,
+  // on évite de transformer trop de victoires en nuls.
+  boost *= 1 - clamp(favoriteSignal * favoritePenalty, 0, 0.82);
+
+  let factor = 1 + boost;
+
+  if (favoriteSignal > 0.75) {
+    factor = Math.min(factor, 1.04);
+  } else if (favoriteSignal > 0.55) {
+    factor = Math.min(factor, 1.08);
+  }
+
+  const smartMax = Math.min(
+    calibration.drawBoostMax,
+    Math.max(1, calibration.smartDrawMaxBoost)
+  );
+
+  return clamp(factor, 1, smartMax);
+}
+
+function getDrawCalibrationFactor(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings,
+  context: PredictionContext
+): number {
+  const calibration = getCalibration(settings);
+
+  if (!calibration.smartDrawBoost) {
+    return getLegacyDrawCalibrationFactor(
+      homeGoals,
+      awayGoals,
+      expectedGoals,
+      settings,
+      context
+    );
+  }
+
+  return getSmartDrawCalibrationFactor(
+    homeGoals,
+    awayGoals,
+    expectedGoals,
+    settings,
+    context
+  );
+}
+
+function getScoreCalibrationFactor(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings,
+  context: PredictionContext
+): number {
+  const calibration = getCalibration(settings);
+  const mode = calibration.scoreCalibration;
+
+  if (mode === 'none') {
+    return 1;
+  }
+
+  const totalGoals = homeGoals + awayGoals;
+  const goalDiff = Math.abs(homeGoals - awayGoals);
+  const xgTotal = expectedGoals.teamA + expectedGoals.teamB;
+  const xgDiff = Math.abs(expectedGoals.teamA - expectedGoals.teamB);
+  const tournament = context.tournament?.toLowerCase() ?? '';
+
+  const lowTotalContext = clamp((2.85 - xgTotal) / 1.15, 0, 1);
+  const closeContext = clamp(1 - xgDiff / 1.05, 0, 1);
+  const favoriteContext = clamp(xgDiff / 1.25, 0, 1);
+
+  let factor = 1;
+  const strength = mode === 'conservative' ? 0.5 : mode === 'worldcup_prudent' ? 0.75 : 1;
+
+  // Calibration empirique douce : elle ne modifie pas les probabilités d'issue
+  // massivement, elle aide surtout à mieux ordonner les scores classiques.
+  if (homeGoals === 0 && awayGoals === 0) {
+    factor += 0.045 * strength * (0.45 + 0.55 * lowTotalContext);
+  } else if (homeGoals === 1 && awayGoals === 1) {
+    factor += 0.065 * strength * (0.35 + 0.65 * closeContext);
+  } else if (goalDiff === 1 && totalGoals <= 3) {
+    factor += 0.035 * strength;
+  } else if (goalDiff === 2 && totalGoals <= 4) {
+    factor += 0.012 * strength * favoriteContext;
+  }
+
+  if (totalGoals >= 5) {
+    factor -= 0.045 * strength;
+  }
+
+  if (totalGoals >= 6) {
+    factor -= 0.045 * strength;
+  }
+
+  if (homeGoals === awayGoals && homeGoals >= 3) {
+    factor -= 0.14 * strength;
+  }
+
+  if (mode === 'worldcup_prudent' && tournament.includes('world cup')) {
+    if (homeGoals === awayGoals && homeGoals <= 1) {
+      factor += 0.025 * closeContext;
+    }
+
+    if (totalGoals >= 5) {
+      factor -= 0.025;
+    }
+  }
+
+  return clamp(factor, 0.74, 1.22);
+}
+
+function getFavoriteControlFactor(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+  const weight = clamp(calibration.favoriteControlWeight, 0, 1.2);
+
+  if (weight <= 0) {
+    return 1;
+  }
+
+  const xgDiff = expectedGoals.teamA - expectedGoals.teamB;
+  const effectiveEloDiff = expectedGoals.eloDiff * expectedGoals.eloImpact;
+  const favoriteDirection =
+    xgDiff + effectiveEloDiff / 520;
+
+  const favoriteStrength = clamp((Math.abs(favoriteDirection) - 0.42) / 1.25, 0, 1);
+
+  if (favoriteStrength <= 0) {
+    return 1;
+  }
+
+  const teamAFavorite = favoriteDirection > 0;
+  const scoreOutcome = homeGoals > awayGoals ? 'teamA' : homeGoals < awayGoals ? 'teamB' : 'draw';
+  const favoriteOutcome = teamAFavorite ? 'teamA' : 'teamB';
+  const favoriteGoals = teamAFavorite ? homeGoals : awayGoals;
+  const underdogGoals = teamAFavorite ? awayGoals : homeGoals;
+  const margin = favoriteGoals - underdogGoals;
+
+  if (scoreOutcome !== favoriteOutcome && scoreOutcome !== 'draw') {
+    return clamp(1 - 0.34 * weight * favoriteStrength, 0.58, 1);
+  }
+
+  if (scoreOutcome === 'draw') {
+    return clamp(1 - 0.13 * weight * favoriteStrength, 0.78, 1);
+  }
+
+  if (margin >= 1 && margin <= 2 && favoriteGoals <= 3) {
+    return clamp(1 + 0.065 * weight * favoriteStrength, 1, 1.12);
+  }
+
+  if (margin >= 4) {
+    return clamp(1 - 0.04 * weight, 0.9, 1);
+  }
+
+  return 1;
 }
 
 function getScoreShapeAdjustment(
@@ -866,14 +1369,11 @@ function getScoreShapeAdjustment(
   settings: ModelSettings,
   context: PredictionContext
 ): number {
-  const rho = getDixonColesRho(context);
-
-  const dixonColesFactor = dixonColesAdjustment(
+  const dixonColesFactor = getDixonColesFactor(
     homeGoals,
     awayGoals,
-    expectedGoals.teamA,
-    expectedGoals.teamB,
-    rho
+    expectedGoals,
+    settings
   );
 
   const drawCalibrationFactor = getDrawCalibrationFactor(
@@ -884,7 +1384,27 @@ function getScoreShapeAdjustment(
     context
   );
 
-  return dixonColesFactor * drawCalibrationFactor;
+  const scoreCalibrationFactor = getScoreCalibrationFactor(
+    homeGoals,
+    awayGoals,
+    expectedGoals,
+    settings,
+    context
+  );
+
+  const favoriteControlFactor = getFavoriteControlFactor(
+    homeGoals,
+    awayGoals,
+    expectedGoals,
+    settings
+  );
+
+  return (
+    dixonColesFactor *
+    drawCalibrationFactor *
+    scoreCalibrationFactor *
+    favoriteControlFactor
+  );
 }
 
 function applyTemperature(
@@ -968,6 +1488,114 @@ function computeOutcomeProbabilities(distribution: ScorePrediction[]) {
   );
 }
 
+
+function bivariatePoissonProbability(
+  lambdaHome: number,
+  lambdaAway: number,
+  sharedLambda: number,
+  homeGoals: number,
+  awayGoals: number
+): number {
+  const safeShared = clamp(
+    sharedLambda,
+    0,
+    Math.max(0, Math.min(lambdaHome, lambdaAway) * 0.65)
+  );
+
+  const independentHome = Math.max(lambdaHome - safeShared, 0.01);
+  const independentAway = Math.max(lambdaAway - safeShared, 0.01);
+
+  const base = Math.exp(-(independentHome + independentAway + safeShared));
+  let sum = 0;
+
+  for (let sharedGoals = 0; sharedGoals <= Math.min(homeGoals, awayGoals); sharedGoals += 1) {
+    const homeIndependentGoals = homeGoals - sharedGoals;
+    const awayIndependentGoals = awayGoals - sharedGoals;
+
+    sum +=
+      (Math.pow(independentHome, homeIndependentGoals) / factorial(homeIndependentGoals)) *
+      (Math.pow(independentAway, awayIndependentGoals) / factorial(awayIndependentGoals)) *
+      (Math.pow(safeShared, sharedGoals) / factorial(sharedGoals));
+  }
+
+  return base * sum;
+}
+
+function getAdaptiveSharedLambda(
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings
+): number {
+  const calibration = getCalibration(settings);
+  const baseShared = clamp(calibration.bivariateSharedLambda, 0, 0.45);
+
+  const totalGoals = expectedGoals.teamA + expectedGoals.teamB;
+  const goalDiff = Math.abs(expectedGoals.teamA - expectedGoals.teamB);
+  const favoriteStrength = Math.abs(expectedGoals.eloDiff) * expectedGoals.eloImpact;
+
+  let multiplier = 1;
+
+  if (goalDiff < 0.3) multiplier += 0.18;
+  else if (goalDiff > 1.1) multiplier -= 0.16;
+
+  if (totalGoals < 2.2) multiplier += 0.14;
+  else if (totalGoals > 3.2) multiplier -= 0.2;
+
+  if (favoriteStrength > 250) multiplier -= 0.18;
+
+  return clamp(baseShared * clamp(multiplier, 0.55, 1.35), 0, 0.45);
+}
+
+function getScoreProbability(
+  homeGoals: number,
+  awayGoals: number,
+  expectedGoals: ExpectedGoals,
+  settings: ModelSettings,
+  context: PredictionContext
+): number {
+  const calibration = getCalibration(settings);
+
+  const independentProbability =
+    poissonProbability(expectedGoals.teamA, homeGoals) *
+    poissonProbability(expectedGoals.teamB, awayGoals);
+
+  const shapeAdjustment = getScoreShapeAdjustment(
+    homeGoals,
+    awayGoals,
+    expectedGoals,
+    settings,
+    context
+  );
+
+  const dixonColesProbability = independentProbability * shapeAdjustment;
+
+  if (calibration.scoreModel === 'independent_poisson') {
+    return independentProbability;
+  }
+
+  if (calibration.scoreModel === 'dixon_coles') {
+    return dixonColesProbability;
+  }
+
+  const bivariateProbability = bivariatePoissonProbability(
+    expectedGoals.teamA,
+    expectedGoals.teamB,
+    getAdaptiveSharedLambda(expectedGoals, settings),
+    homeGoals,
+    awayGoals
+  );
+
+  if (calibration.scoreModel === 'bivariate_poisson') {
+    return bivariateProbability;
+  }
+
+  const bivariateWeight = clamp(calibration.bivariateBlendWeight, 0, 1);
+
+  return (
+    dixonColesProbability * (1 - bivariateWeight) +
+    bivariateProbability * bivariateWeight
+  );
+}
+
 export function predictScoreDistribution(
   teamA: string,
   teamB: string,
@@ -987,27 +1615,16 @@ export function predictScoreDistribution(
 
   for (let homeGoals = 0; homeGoals <= settings.maxGoals; homeGoals += 1) {
     for (let awayGoals = 0; awayGoals <= settings.maxGoals; awayGoals += 1) {
-      const homeProbability = poissonProbability(
-        expectedGoals.teamA,
-        homeGoals
-      );
-      const awayProbability = poissonProbability(
-        expectedGoals.teamB,
-        awayGoals
-      );
-
-      const scoreShapeAdjustment = getScoreShapeAdjustment(
-        homeGoals,
-        awayGoals,
-        expectedGoals,
-        settings,
-        context
-      );
-
       distribution.push({
         homeGoals,
         awayGoals,
-        probability: homeProbability * awayProbability * scoreShapeAdjustment,
+        probability: getScoreProbability(
+          homeGoals,
+          awayGoals,
+          expectedGoals,
+          settings,
+          context
+        ),
       });
     }
   }

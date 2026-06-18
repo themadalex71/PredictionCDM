@@ -36,21 +36,40 @@ const defaultSettings: ModelSettings = {
   recentFormWeight: 0.35,
   officialMatchWeight: 1.7,
   homeAdvantage: 0.18,
-  maxGoals: 6,
+  maxGoals: 8,
 
   favoriteShrinkBase: 1,
   favoriteShrinkClose: 1,
   favoriteShrinkMedium: 1,
 
   drawBoostBase: 1,
-  drawBoostCloseMatch: 0,
-  drawBoostLowTotal: 0,
-  drawBoostMax: 1,
+  drawBoostCloseMatch: 0.04,
+  drawBoostLowTotal: 0.03,
+  drawBoostMax: 1.22,
+  drawMultiplier: 1.06,
+  lowScoreDrawBoost: 0.06,
+  smartDrawBoost: true,
+  smartDrawFavoritePenalty: 0.75,
+  smartDrawMaxBoost: 1.22,
 
   externalEloImpact: 0.35,
   internalEloImpact: 0.35,
 
   scoreTemperature: 1,
+
+  useDixonColes: true,
+  dixonColesRho: -0.08,
+  dixonColesWeight: 1,
+  scoreModel: 'hybrid_dc_bivariate',
+  adaptiveDixonColes: true,
+  bivariateSharedLambda: 0.08,
+  bivariateBlendWeight: 0.25,
+
+  advancedCompetitionWeights: true,
+  opponentEloAdjustmentWeight: 0.45,
+  dataConfidenceWeight: 1.2,
+  scoreCalibration: 'classic_top1',
+  favoriteControlWeight: 0.18,
 };
 
 const navItems: { id: Page; label: string }[] = [
@@ -152,7 +171,7 @@ export default function App() {
           <span className="logo-mark">MPP</span>
           <div>
             <strong>World Cup Predictor</strong>
-            <small>Version Poisson v0.8 · MPP backtest</small>
+            <small>Version Dixon-Coles calibrable · MPP backtest</small>
           </div>
         </div>
 
@@ -213,7 +232,7 @@ export default function App() {
         )}
 
         {page === 'backtest' && (
-          <BacktestPage matches={matches} settings={settings} />
+          <BacktestPage matches={matches} settings={settings} onSettingsChange={setSettings} />
         )}
 
         {page === 'mpp' && (

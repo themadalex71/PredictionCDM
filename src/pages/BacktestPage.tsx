@@ -1,22 +1,24 @@
 import { useMemo, useState } from 'react';
 import type { MatchResult, ModelSettings } from '../types/football';
 import {
-  calibrationPresets,
-  eloImpactPresets,
+  buildCalibrationSearchResult,
+  createCalibrationSearchRow,
   formatOutcomeLabel,
+  modelCalibrationCandidates,
   runBacktest,
-  temperaturePresets,
   type BacktestOptions,
   type BacktestResult,
   type BacktestRow,
   type CalibrationSearchResult,
   type CalibrationSearchRow,
   type MatchOutcome,
+  type ModelCalibrationCandidate,
 } from '../utils/backtestModel';
 
 type BacktestPageProps = {
   matches: MatchResult[];
   settings: ModelSettings;
+  onSettingsChange?: (settings: ModelSettings) => void;
 };
 
 type OutcomeBreakdown = {
@@ -46,6 +48,44 @@ type CalibrationProgress = {
   currentLabel: string;
 };
 
+const ROBUST_CALIBRATION_WINDOWS = [150, 300, 500] as const;
+
+type RobustCalibrationWindow = {
+  maxMatches: number;
+  row: CalibrationSearchRow;
+};
+
+type RobustCalibrationRow = {
+  id: string;
+  name: string;
+  description: string;
+  settings: ModelSettings;
+  windows: RobustCalibrationWindow[];
+  averageGlobalScore: number;
+  averageResultScore: number;
+  averageExactScore: number;
+  averageDrawBalanceScore: number;
+  averageOutcomeAccuracy: number;
+  averageTop1Accuracy: number;
+  averageTop5Accuracy: number;
+  averageResultLogLoss: number;
+  averageBrierScore: number;
+  averagePredictedDrawShare: number;
+  averageDrawGap: number;
+  globalScoreRange: number;
+  globalScoreStdDev: number;
+  stabilityScore: number;
+  robustScore: number;
+};
+
+type RobustCalibrationResult = {
+  rows: RobustCalibrationRow[];
+  bestByRobustScore?: RobustCalibrationRow;
+  bestByAverageGlobalScore?: RobustCalibrationRow;
+  bestByStability?: RobustCalibrationRow;
+  bestByOutcome?: RobustCalibrationRow;
+};
+
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)} %`;
 }
@@ -66,6 +106,102 @@ function average(values: number[]): number {
   if (values.length === 0) return 0;
 
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+  if (values.length <= 1) return 0;
+
+  const mean = average(values);
+  const variance = average(values.map((value) => (value - mean) ** 2));
+
+  return Math.sqrt(variance);
+}
+
+function range(values: number[]): number {
+  if (values.length === 0) return 0;
+
+  return Math.max(...values) - Math.min(...values);
+}
+
+function buildRobustCalibrationRow(
+  candidate: ModelCalibrationCandidate,
+  settings: ModelSettings,
+  windows: RobustCalibrationWindow[]
+): RobustCalibrationRow {
+  const globalScores = windows.map((window) => window.row.globalScore);
+  const globalScoreRange = range(globalScores);
+  const globalScoreStdDev = standardDeviation(globalScores);
+  const stabilityScore = Math.max(0, 100 - globalScoreStdDev * 5 - globalScoreRange * 1.5);
+  const averageGlobalScore = average(globalScores);
+
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    description: candidate.description,
+    settings,
+    windows,
+    averageGlobalScore,
+    averageResultScore: average(windows.map((window) => window.row.resultScore)),
+    averageExactScore: average(windows.map((window) => window.row.exactScore)),
+    averageDrawBalanceScore: average(
+      windows.map((window) => window.row.drawBalanceScore)
+    ),
+    averageOutcomeAccuracy: average(
+      windows.map((window) => window.row.summary.outcomeAccuracy)
+    ),
+    averageTop1Accuracy: average(
+      windows.map((window) => window.row.summary.exactTop1Accuracy)
+    ),
+    averageTop5Accuracy: average(
+      windows.map((window) => window.row.summary.exactTop5Accuracy)
+    ),
+    averageResultLogLoss: average(
+      windows.map((window) => window.row.summary.averageResultLogLoss)
+    ),
+    averageBrierScore: average(
+      windows.map((window) => window.row.summary.averageBrierScore)
+    ),
+    averagePredictedDrawShare: average(
+      windows.map((window) => window.row.summary.predictedDrawShare)
+    ),
+    averageDrawGap: average(
+      windows.map((window) => window.row.summary.absoluteDrawPredictionGap)
+    ),
+    globalScoreRange,
+    globalScoreStdDev,
+    stabilityScore,
+    robustScore:
+      averageGlobalScore * 0.7 +
+      Math.min(...globalScores) * 0.2 +
+      stabilityScore * 0.1,
+  };
+}
+
+function buildRobustCalibrationResult(
+  rows: RobustCalibrationRow[]
+): RobustCalibrationResult {
+  const byRobustScore = [...rows].sort((a, b) => b.robustScore - a.robustScore);
+  const byAverageGlobalScore = [...rows].sort(
+    (a, b) => b.averageGlobalScore - a.averageGlobalScore
+  );
+  const byStability = [...rows].sort((a, b) => {
+    if (b.stabilityScore !== a.stabilityScore) {
+      return b.stabilityScore - a.stabilityScore;
+    }
+
+    return b.averageGlobalScore - a.averageGlobalScore;
+  });
+  const byOutcome = [...rows].sort(
+    (a, b) => b.averageOutcomeAccuracy - a.averageOutcomeAccuracy
+  );
+
+  return {
+    rows,
+    bestByRobustScore: byRobustScore[0],
+    bestByAverageGlobalScore: byAverageGlobalScore[0],
+    bestByStability: byStability[0],
+    bestByOutcome: byOutcome[0],
+  };
 }
 
 function waitForUiUpdate(): Promise<void> {
@@ -165,35 +301,7 @@ function getBestRows(rows: BacktestRow[]): BacktestRow[] {
     .slice(0, 20);
 }
 
-function buildCalibrationSearchResult(
-  rows: CalibrationSearchRow[]
-): CalibrationSearchResult {
-  const byLogLoss = [...rows].sort(
-    (a, b) => a.summary.averageResultLogLoss - b.summary.averageResultLogLoss
-  );
-
-  const byBrier = [...rows].sort(
-    (a, b) => a.summary.averageBrierScore - b.summary.averageBrierScore
-  );
-
-  const byOutcome = [...rows].sort(
-    (a, b) => b.summary.outcomeAccuracy - a.summary.outcomeAccuracy
-  );
-
-  const byTop5 = [...rows].sort(
-    (a, b) => b.summary.exactTop5Accuracy - a.summary.exactTop5Accuracy
-  );
-
-  return {
-    rows,
-    bestByLogLoss: byLogLoss[0],
-    bestByBrier: byBrier[0],
-    bestByOutcome: byOutcome[0],
-    bestByTop5: byTop5[0],
-  };
-}
-
-export function BacktestPage({ matches, settings }: BacktestPageProps) {
+export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPageProps) {
   const [options, setOptions] = useState<BacktestOptions>({
     testStartDate: '2024-01-01',
     testEndDate: '2026-06-15',
@@ -209,8 +317,13 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
   const [calibrationResult, setCalibrationResult] =
     useState<CalibrationSearchResult | null>(null);
 
+  const [robustCalibrationResult, setRobustCalibrationResult] =
+    useState<RobustCalibrationResult | null>(null);
+
   const [calibrationProgress, setCalibrationProgress] =
     useState<CalibrationProgress | null>(null);
+
+  const [appliedCalibrationLabel, setAppliedCalibrationLabel] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
@@ -278,69 +391,53 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
   async function handleRunCalibrationSearch() {
     setIsCalibrating(true);
     setCalibrationResult(null);
+    setRobustCalibrationResult(null);
+    setAppliedCalibrationLabel(null);
 
-    const total =
-      calibrationPresets.length *
-      eloImpactPresets.length *
-      temperaturePresets.length;
-
+    const total = modelCalibrationCandidates.length;
     const rows: CalibrationSearchRow[] = [];
     let current = 0;
 
     setCalibrationProgress({
       current: 0,
       total,
-      currentLabel: 'Préparation de la calibration...',
+      currentLabel: 'Préparation de la calibration modèle...',
     });
 
     await waitForUiUpdate();
 
-    for (const calibrationPreset of calibrationPresets) {
-      for (const eloImpactPreset of eloImpactPresets) {
-        for (const temperaturePreset of temperaturePresets) {
-          const label = `${calibrationPreset.name} · ${eloImpactPreset.label} · ${temperaturePreset.label}`;
+    for (const candidate of modelCalibrationCandidates) {
+      const calibratedSettings: ModelSettings = {
+        ...settings,
+        ...candidate.settingsPatch,
+      };
 
-          setCalibrationProgress({
-            current,
-            total,
-            currentLabel: `Calcul en cours : ${label}`,
-          });
+      setCalibrationProgress({
+        current,
+        total,
+        currentLabel: `Calcul en cours : ${candidate.name}`,
+      });
 
-          await waitForUiUpdate();
+      await waitForUiUpdate();
 
-          const calibratedSettings: ModelSettings = {
-            ...settings,
-            ...calibrationPreset.settingsPatch,
-            externalEloImpact: eloImpactPreset.value,
-            internalEloImpact: eloImpactPreset.value,
-            scoreTemperature: temperaturePreset.value,
-          };
+      const result = runBacktest(matches, calibratedSettings, options);
+      rows.push(
+        createCalibrationSearchRow(
+          candidate,
+          calibratedSettings,
+          result.summary
+        )
+      );
 
-          const result = runBacktest(matches, calibratedSettings, options);
+      current += 1;
 
-          rows.push({
-            id: `${calibrationPreset.id}_${eloImpactPreset.id}_${temperaturePreset.id}`,
-            name: label,
-            description: `${calibrationPreset.description} ${eloImpactPreset.description} ${temperaturePreset.description}`,
-            eloImpactLabel: eloImpactPreset.label,
-            eloImpactValue: eloImpactPreset.value,
-            temperatureLabel: temperaturePreset.label,
-            temperatureValue: temperaturePreset.value,
-            settings: calibratedSettings,
-            summary: result.summary,
-          });
+      setCalibrationProgress({
+        current,
+        total,
+        currentLabel: `Terminé : ${candidate.name}`,
+      });
 
-          current += 1;
-
-          setCalibrationProgress({
-            current,
-            total,
-            currentLabel: `Terminé : ${label}`,
-          });
-
-          await waitForUiUpdate();
-        }
-      }
+      await waitForUiUpdate();
     }
 
     setCalibrationResult(buildCalibrationSearchResult(rows));
@@ -352,6 +449,97 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
       currentLabel: 'Calibration terminée.',
     });
   }
+
+  async function handleRunRobustCalibrationSearch() {
+    setIsCalibrating(true);
+    setCalibrationResult(null);
+    setRobustCalibrationResult(null);
+    setAppliedCalibrationLabel(null);
+
+    const windows = ROBUST_CALIBRATION_WINDOWS.map((maxMatches) => ({
+      ...options,
+      maxMatches,
+    }));
+    const total = modelCalibrationCandidates.length * windows.length;
+    const robustRows: RobustCalibrationRow[] = [];
+    let current = 0;
+
+    setCalibrationProgress({
+      current: 0,
+      total,
+      currentLabel: 'Préparation de la calibration robuste 150 / 300 / 500...',
+    });
+
+    await waitForUiUpdate();
+
+    for (const candidate of modelCalibrationCandidates) {
+      const calibratedSettings: ModelSettings = {
+        ...settings,
+        ...candidate.settingsPatch,
+      };
+      const windowResults: RobustCalibrationWindow[] = [];
+
+      for (const windowOptions of windows) {
+        setCalibrationProgress({
+          current,
+          total,
+          currentLabel: `Calcul : ${candidate.name} · ${windowOptions.maxMatches} matchs`,
+        });
+
+        await waitForUiUpdate();
+
+        const result = runBacktest(matches, calibratedSettings, windowOptions);
+        const row = createCalibrationSearchRow(
+          candidate,
+          calibratedSettings,
+          result.summary
+        );
+
+        windowResults.push({
+          maxMatches: windowOptions.maxMatches,
+          row,
+        });
+
+        current += 1;
+
+        setCalibrationProgress({
+          current,
+          total,
+          currentLabel: `Terminé : ${candidate.name} · ${windowOptions.maxMatches} matchs`,
+        });
+
+        await waitForUiUpdate();
+      }
+
+      robustRows.push(
+        buildRobustCalibrationRow(candidate, calibratedSettings, windowResults)
+      );
+    }
+
+    setRobustCalibrationResult(buildRobustCalibrationResult(robustRows));
+    setIsCalibrating(false);
+
+    setCalibrationProgress({
+      current: total,
+      total,
+      currentLabel: 'Calibration robuste terminée.',
+    });
+  }
+
+  function handleApplyCalibration(row: CalibrationSearchRow) {
+    if (!onSettingsChange) return;
+
+    onSettingsChange(row.settings);
+    setAppliedCalibrationLabel(row.name);
+  }
+
+  function handleApplyRobustCalibration(row: RobustCalibrationRow) {
+    if (!onSettingsChange) return;
+
+    onSettingsChange(row.settings);
+    setAppliedCalibrationLabel(`${row.name} · robuste`);
+  }
+
 
   return (
     <div className="page-stack">
@@ -466,6 +654,17 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
               ? `Calibration en cours... ${progressPercent} %`
               : 'Tester plusieurs calibrations'}
           </button>
+
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={handleRunRobustCalibrationSearch}
+            disabled={isRunning || isCalibrating}
+          >
+            {isCalibrating
+              ? `Robustesse en cours... ${progressPercent} %`
+              : 'Tester robustesse 150 / 300 / 500'}
+          </button>
         </div>
 
         {(isCalibrating || calibrationProgress) && (
@@ -519,60 +718,61 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
         )}
       </section>
 
-      {calibrationResult && (
+      {robustCalibrationResult && (
         <section className="card">
           <div className="section-title">
-            <p className="eyebrow">Calibration automatique</p>
-            <h2>Comparaison des réglages du modèle</h2>
+            <p className="eyebrow">Calibration robuste du modèle</p>
+            <h2>Comparer les coefficients sur 150, 300 et 500 matchs</h2>
           </div>
 
           <p>
-            Le tableau teste plusieurs réglages de correction des nuls, d’impact
-            Elo et de température de distribution.
+            Cette vue évite de choisir un preset qui marche seulement sur une
+            seule fenêtre. Chaque réglage est testé sur 150, 300 et 500 matchs.
+            Le score robuste combine la moyenne, le pire résultat et la stabilité
+            entre les trois fenêtres.
           </p>
+
+          {appliedCalibrationLabel && (
+            <p className="import-status">
+              Réglage appliqué aux paramètres : <strong>{appliedCalibrationLabel}</strong>.
+              Tu peux maintenant relancer le backtest modèle ou aller dans Prédictions / Backtest MPP.
+            </p>
+          )}
 
           <div className="stats-summary-grid">
             <article className="card mini-card">
-              <p className="eyebrow">Meilleur log loss</p>
-              <h2>{calibrationResult.bestByLogLoss?.name}</h2>
+              <p className="eyebrow">Meilleur robuste</p>
+              <h2>{robustCalibrationResult.bestByRobustScore?.name}</h2>
               <p>
-                {calibrationResult.bestByLogLoss?.summary.averageResultLogLoss.toFixed(
-                  3
-                )}
+                Score robuste :{' '}
+                {robustCalibrationResult.bestByRobustScore?.robustScore.toFixed(1)} / 100
               </p>
             </article>
 
             <article className="card mini-card">
-              <p className="eyebrow">Meilleur Brier</p>
-              <h2>{calibrationResult.bestByBrier?.name}</h2>
+              <p className="eyebrow">Meilleure moyenne</p>
+              <h2>{robustCalibrationResult.bestByAverageGlobalScore?.name}</h2>
               <p>
-                {calibrationResult.bestByBrier?.summary.averageBrierScore.toFixed(
-                  3
-                )}
+                Moyenne globale :{' '}
+                {robustCalibrationResult.bestByAverageGlobalScore?.averageGlobalScore.toFixed(1)} / 100
               </p>
             </article>
 
             <article className="card mini-card">
-              <p className="eyebrow">Meilleur résultat</p>
-              <h2>{calibrationResult.bestByOutcome?.name}</h2>
+              <p className="eyebrow">Plus stable</p>
+              <h2>{robustCalibrationResult.bestByStability?.name}</h2>
               <p>
-                {calibrationResult.bestByOutcome
-                  ? formatPercent(
-                      calibrationResult.bestByOutcome.summary.outcomeAccuracy
-                    )
-                  : '-'}
+                Stabilité :{' '}
+                {robustCalibrationResult.bestByStability?.stabilityScore.toFixed(1)} / 100
               </p>
             </article>
 
             <article className="card mini-card">
-              <p className="eyebrow">Meilleur Top 5</p>
-              <h2>{calibrationResult.bestByTop5?.name}</h2>
+              <p className="eyebrow">Meilleur résultat moyen</p>
+              <h2>{robustCalibrationResult.bestByOutcome?.name}</h2>
               <p>
-                {calibrationResult.bestByTop5
-                  ? formatPercent(
-                      calibrationResult.bestByTop5.summary.exactTop5Accuracy
-                    )
-                  : '-'}
+                Bon résultat moyen :{' '}
+                {formatPercent(robustCalibrationResult.bestByOutcome?.averageOutcomeAccuracy ?? 0)}
               </p>
             </article>
           </div>
@@ -581,32 +781,189 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
             <table>
               <thead>
                 <tr>
-                  <th>Calibration</th>
+                  <th>Rang</th>
+                  <th>Réglage</th>
+                  <th>Score robuste</th>
+                  <th>Moyenne globale</th>
+                  <th>Stabilité</th>
+                  <th>Bon résultat moyen</th>
+                  <th>Top 1 moyen</th>
+                  <th>Top 5 moyen</th>
+                  <th>Log loss</th>
+                  <th>Brier</th>
+                  <th>Écart nul moyen</th>
+                  <th>Détail 150 / 300 / 500</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {[...robustCalibrationResult.rows]
+                  .sort((a, b) => b.robustScore - a.robustScore)
+                  .map((row, index) => (
+                    <tr key={`robust-${row.id}`}>
+                      <td>{index + 1}</td>
+
+                      <td>
+                        <strong>{row.name}</strong>
+                        <br />
+                        <span className="muted-text">{row.description}</span>
+                      </td>
+
+                      <td>
+                        <strong>{row.robustScore.toFixed(1)}</strong> / 100
+                        <br />
+                        <span className="muted-text">
+                          Pire fenêtre :{' '}
+                          {Math.min(...row.windows.map((window) => window.row.globalScore)).toFixed(1)}
+                        </span>
+                      </td>
+
+                      <td>{row.averageGlobalScore.toFixed(1)} / 100</td>
+
+                      <td>
+                        {row.stabilityScore.toFixed(1)} / 100
+                        <br />
+                        <span className="muted-text">
+                          Écart : {row.globalScoreRange.toFixed(1)} pts
+                        </span>
+                      </td>
+
+                      <td>{formatPercent(row.averageOutcomeAccuracy)}</td>
+                      <td>{formatPercent(row.averageTop1Accuracy)}</td>
+                      <td>{formatPercent(row.averageTop5Accuracy)}</td>
+                      <td>{row.averageResultLogLoss.toFixed(3)}</td>
+                      <td>{row.averageBrierScore.toFixed(3)}</td>
+                      <td>{formatPercent(row.averageDrawGap)}</td>
+
+                      <td>
+                        {row.windows.map((window) => (
+                          <span key={`${row.id}-${window.maxMatches}`} className="muted-text">
+                            {window.maxMatches} : {window.row.globalScore.toFixed(1)} global ·{' '}
+                            {formatPercent(window.row.summary.outcomeAccuracy)} résultat
+                            <br />
+                          </span>
+                        ))}
+                      </td>
+
+                      <td>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => handleApplyRobustCalibration(row)}
+                          disabled={!onSettingsChange}
+                        >
+                          Appliquer
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {calibrationResult && (
+        <section className="card">
+          <div className="section-title">
+            <p className="eyebrow">Calibration automatique du modèle</p>
+            <h2>Choisir les meilleurs coefficients dans le backtest modèle</h2>
+          </div>
+
+          <p>
+            Cette calibration ne regarde pas les points MPP. Elle teste des
+            coefficients du moteur statistique sur les matchs historiques, puis
+            classe les réglages selon un score global : bons résultats, log loss,
+            Brier score, Top 1 / Top 5 score exact, probabilité donnée au score
+            réel et équilibre des nuls.
+          </p>
+
+          {appliedCalibrationLabel && (
+            <p className="import-status">
+              Réglage appliqué aux paramètres : <strong>{appliedCalibrationLabel}</strong>.
+              Tu peux maintenant relancer le backtest modèle ou aller dans Prédictions / Backtest MPP.
+            </p>
+          )}
+
+          <div className="stats-summary-grid">
+            <article className="card mini-card">
+              <p className="eyebrow">Meilleur compromis</p>
+              <h2>{calibrationResult.bestByGlobalScore?.name}</h2>
+              <p>
+                Score global :{' '}
+                {calibrationResult.bestByGlobalScore?.globalScore.toFixed(1)} / 100
+              </p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Meilleur résultat 1/N/2</p>
+              <h2>{calibrationResult.bestByResultScore?.name}</h2>
+              <p>
+                Score résultat :{' '}
+                {calibrationResult.bestByResultScore?.resultScore.toFixed(1)} / 100
+              </p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Meilleur score exact</p>
+              <h2>{calibrationResult.bestByExactScore?.name}</h2>
+              <p>
+                Score exact :{' '}
+                {calibrationResult.bestByExactScore?.exactScore.toFixed(1)} / 100
+              </p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Meilleur équilibre nuls</p>
+              <h2>{calibrationResult.bestByDrawBalance?.name}</h2>
+              <p>
+                Score nuls :{' '}
+                {calibrationResult.bestByDrawBalance?.drawBalanceScore.toFixed(1)} / 100
+              </p>
+            </article>
+          </div>
+
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rang</th>
+                  <th>Réglage</th>
+                  <th>Scores calibration</th>
                   <th>Bon résultat</th>
                   <th>Top 1</th>
                   <th>Top 5</th>
                   <th>Log loss</th>
                   <th>Brier</th>
-                  <th>Nuls réels</th>
                   <th>Nuls prédits</th>
-                  <th>Proba score réel</th>
-                  <th>Proba résultat réel</th>
+                  <th>Écart nul</th>
+                  <th>Coefficients clés</th>
+                  <th>Action</th>
                 </tr>
               </thead>
 
               <tbody>
                 {[...calibrationResult.rows]
-                  .sort(
-                    (a, b) =>
-                      a.summary.averageResultLogLoss -
-                      b.summary.averageResultLogLoss
-                  )
-                  .map((row) => (
+                  .sort((a, b) => b.globalScore - a.globalScore)
+                  .map((row, index) => (
                     <tr key={row.id}>
+                      <td>{index + 1}</td>
+
                       <td>
                         <strong>{row.name}</strong>
                         <br />
                         <span className="muted-text">{row.description}</span>
+                      </td>
+
+                      <td>
+                        <strong>{row.globalScore.toFixed(1)}</strong> global
+                        <br />
+                        <span className="muted-text">
+                          Résultat {row.resultScore.toFixed(1)} · Exact{' '}
+                          {row.exactScore.toFixed(1)} · Nuls{' '}
+                          {row.drawBalanceScore.toFixed(1)}
+                        </span>
                       </td>
 
                       <td>{formatPercent(row.summary.outcomeAccuracy)}</td>
@@ -614,17 +971,26 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
                       <td>{formatPercent(row.summary.exactTop5Accuracy)}</td>
                       <td>{row.summary.averageResultLogLoss.toFixed(3)}</td>
                       <td>{row.summary.averageBrierScore.toFixed(3)}</td>
-                      <td>{formatPercent(row.summary.actualDrawShare)}</td>
                       <td>{formatPercent(row.summary.predictedDrawShare)}</td>
+                      <td>{formatPercent(row.summary.absoluteDrawPredictionGap)}</td>
+
                       <td>
-                        {formatProbability(
-                          row.summary.averageActualScoreProbability
-                        )}
+                        <span className="muted-text">
+                          {row.scoreModelLabel} · {row.temperatureLabel} ·{' '}
+                          {row.eloImpactLabel} · {row.dixonColesRhoLabel} ·{' '}
+                          {row.drawTuningLabel}
+                        </span>
                       </td>
+
                       <td>
-                        {formatProbability(
-                          row.summary.averageActualOutcomeProbability
-                        )}
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => handleApplyCalibration(row)}
+                          disabled={!onSettingsChange}
+                        >
+                          Appliquer
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -698,6 +1064,12 @@ export function BacktestPage({ matches, settings }: BacktestPageProps) {
               <p className="eyebrow">Brier score</p>
               <h2>{backtestResult.summary.averageBrierScore.toFixed(3)}</h2>
               <p>Plus c’est bas, mieux c’est.</p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Écart nuls</p>
+              <h2>{formatPercent(backtestResult.summary.absoluteDrawPredictionGap)}</h2>
+              <p>Écart absolu entre la part de nuls réels et celle des nuls prédits.</p>
             </article>
           </section>
 

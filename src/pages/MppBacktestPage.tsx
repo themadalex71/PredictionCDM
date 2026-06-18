@@ -38,7 +38,174 @@ type EditableMppRecord = {
   actualAwayScore: string;
 };
 
+type MppModelCalibrationRow = {
+  id: string;
+  label: string;
+  description: string;
+  settingsPatch: Partial<ModelSettings>;
+  summary: MppBacktestResult['summaries'][number] | null;
+};
+
 const STORAGE_KEY = 'mpp-worldcup-backtest-records-v1';
+
+const MPP_MODEL_CALIBRATION_PRESETS: Array<{
+  id: string;
+  label: string;
+  description: string;
+  settingsPatch: Partial<ModelSettings>;
+}> = [
+  {
+    id: 'current',
+    label: 'Réglage actuel',
+    description: 'Paramètres actuellement utilisés dans l’application.',
+    settingsPatch: {},
+  },
+  {
+    id: 'result_model_v1',
+    label: 'Nouveau modèle résultat v1',
+    description: 'Pondération compétition avancée + adversaire Elo + prudence données faibles + calibration scores classiques.',
+    settingsPatch: {
+      advancedCompetitionWeights: true,
+      opponentEloAdjustmentWeight: 0.45,
+      dataConfidenceWeight: 1.2,
+      scoreCalibration: 'classic_top1',
+      favoriteControlWeight: 0.18,
+    },
+  },
+  {
+    id: 'result_model_prudent',
+    label: 'Modèle résultat prudent',
+    description: 'Version plus prudente : davantage de shrink des données faibles et contrôle plus fort des favoris.',
+    settingsPatch: {
+      advancedCompetitionWeights: true,
+      opponentEloAdjustmentWeight: 0.55,
+      dataConfidenceWeight: 1.35,
+      scoreCalibration: 'worldcup_prudent',
+      favoriteControlWeight: 0.28,
+    },
+  },
+  {
+    id: 'result_model_temp110',
+    label: 'Temp 1.10 + modèle résultat v1',
+    description: 'Nouveau moteur statistique avec distribution plus plate, à comparer au meilleur preset MPP actuel.',
+    settingsPatch: {
+      scoreTemperature: 1.1,
+      advancedCompetitionWeights: true,
+      opponentEloAdjustmentWeight: 0.45,
+      dataConfidenceWeight: 1.2,
+      scoreCalibration: 'classic_top1',
+      favoriteControlWeight: 0.18,
+    },
+  },
+  {
+    id: 'stable_no_draw',
+    label: 'Stable sans boost nul',
+    description: 'Témoin statistique : pas de boost supplémentaire des nuls.',
+    settingsPatch: {
+      smartDrawBoost: false,
+      drawMultiplier: 1,
+      lowScoreDrawBoost: 0,
+      drawBoostCloseMatch: 0,
+      drawBoostLowTotal: 0,
+      drawBoostMax: 1.05,
+      smartDrawMaxBoost: 1.05,
+    },
+  },
+  {
+    id: 'smart_draw_light',
+    label: 'Smart Draw léger',
+    description: 'Boost nul doux, uniquement quand le match paraît serré/fermé.',
+    settingsPatch: {
+      smartDrawBoost: true,
+      drawMultiplier: 1.05,
+      lowScoreDrawBoost: 0.04,
+      drawBoostCloseMatch: 0.035,
+      drawBoostLowTotal: 0.025,
+      drawBoostMax: 1.16,
+      smartDrawMaxBoost: 1.16,
+      smartDrawFavoritePenalty: 0.85,
+    },
+  },
+  {
+    id: 'smart_draw_medium',
+    label: 'Smart Draw moyen',
+    description: 'Réglage recommandé : corrige les nuls sans trop casser les victoires A/B.',
+    settingsPatch: {
+      smartDrawBoost: true,
+      drawMultiplier: 1.08,
+      lowScoreDrawBoost: 0.07,
+      drawBoostCloseMatch: 0.055,
+      drawBoostLowTotal: 0.04,
+      drawBoostMax: 1.25,
+      smartDrawMaxBoost: 1.25,
+      smartDrawFavoritePenalty: 0.8,
+    },
+  },
+  {
+    id: 'smart_draw_mpp',
+    label: 'Temp 1.10 + Smart Draw MPP',
+    description: 'Preset orienté MPP : distribution plus plate et boost intelligent des nuls.',
+    settingsPatch: {
+      scoreTemperature: 1.1,
+      smartDrawBoost: true,
+      drawMultiplier: 1.1,
+      lowScoreDrawBoost: 0.09,
+      drawBoostCloseMatch: 0.065,
+      drawBoostLowTotal: 0.045,
+      drawBoostMax: 1.32,
+      smartDrawMaxBoost: 1.32,
+      smartDrawFavoritePenalty: 0.72,
+    },
+  },
+  {
+    id: 'smart_draw_mpp_prudent',
+    label: 'Temp 1.10 + Smart Draw prudent',
+    description: 'Même logique MPP, mais pénalise plus fortement les nuls si un favori clair existe.',
+    settingsPatch: {
+      scoreTemperature: 1.1,
+      smartDrawBoost: true,
+      drawMultiplier: 1.08,
+      lowScoreDrawBoost: 0.07,
+      drawBoostCloseMatch: 0.055,
+      drawBoostLowTotal: 0.04,
+      drawBoostMax: 1.24,
+      smartDrawMaxBoost: 1.24,
+      smartDrawFavoritePenalty: 0.95,
+    },
+  },
+  {
+    id: 'draw_medium_legacy',
+    label: 'Temp 1.10 + nuls moyen classique',
+    description: 'Ancien réglage qui avait marqué beaucoup de points MPP, conservé pour comparaison.',
+    settingsPatch: {
+      scoreTemperature: 1.1,
+      smartDrawBoost: false,
+      drawMultiplier: 1.12,
+      lowScoreDrawBoost: 0.1,
+      drawBoostCloseMatch: 0.06,
+      drawBoostLowTotal: 0.04,
+      drawBoostMax: 1.75,
+      smartDrawMaxBoost: 1.75,
+    },
+  },
+  {
+    id: 'elo65_smart_draw',
+    label: 'Elo 65 % + Smart Draw moyen',
+    description: 'Elo plus présent, avec correction intelligente des nuls.',
+    settingsPatch: {
+      externalEloImpact: 0.65,
+      internalEloImpact: 0.65,
+      smartDrawBoost: true,
+      drawMultiplier: 1.08,
+      lowScoreDrawBoost: 0.07,
+      drawBoostCloseMatch: 0.055,
+      drawBoostLowTotal: 0.04,
+      drawBoostMax: 1.25,
+      smartDrawMaxBoost: 1.25,
+      smartDrawFavoritePenalty: 0.8,
+    },
+  },
+];
 
 function parseNumber(value: string): number {
   const normalized = value.replace(',', '.').trim();
@@ -261,6 +428,9 @@ export function MppBacktestPage({ matches, settings }: MppBacktestPageProps) {
   const [backtestResult, setBacktestResult] =
     useState<MppBacktestResult | null>(null);
 
+  const [modelCalibrationRows, setModelCalibrationRows] =
+    useState<MppModelCalibrationRow[]>([]);
+
   useEffect(() => {
     setRecords(loadStoredRecords());
   }, []);
@@ -341,6 +511,33 @@ export function MppBacktestPage({ matches, settings }: MppBacktestPageProps) {
     const result = runMppBacktest(inputs, matches, settings);
 
     setBacktestResult(result);
+  }
+
+  function handleRunModelCalibration() {
+    const inputs = completedRecords.map(convertRecordToInput);
+
+    const rows = MPP_MODEL_CALIBRATION_PRESETS.map((preset) => {
+      const calibratedSettings: ModelSettings = {
+        ...settings,
+        ...preset.settingsPatch,
+      };
+
+      const result = runMppBacktest(inputs, matches, calibratedSettings);
+      const recommendedSummary =
+        result.summaries.find((summary) => summary.strategyId === 'recommended') ??
+        result.bestStrategy ??
+        null;
+
+      return {
+        id: preset.id,
+        label: preset.label,
+        description: preset.description,
+        settingsPatch: preset.settingsPatch,
+        summary: recommendedSummary,
+      };
+    }).sort((a, b) => (b.summary?.pointsWon ?? 0) - (a.summary?.pointsWon ?? 0));
+
+    setModelCalibrationRows(rows);
   }
 
   function handleResetAll() {
@@ -544,6 +741,15 @@ export function MppBacktestPage({ matches, settings }: MppBacktestPageProps) {
           <button
             className="secondary-button"
             type="button"
+            onClick={handleRunModelCalibration}
+            disabled={completedRecords.length === 0}
+          >
+            Tester les réglages modèle sur MPP
+          </button>
+
+          <button
+            className="secondary-button"
+            type="button"
             onClick={handleExportJson}
           >
             Exporter les données
@@ -566,6 +772,62 @@ export function MppBacktestPage({ matches, settings }: MppBacktestPageProps) {
           </button>
         </div>
       </section>
+
+      {modelCalibrationRows.length > 0 && (
+        <section className="card">
+          <div className="section-title">
+            <p className="eyebrow">Calibration modèle avec points MPP</p>
+            <h2>Quel réglage du moteur rapporte le plus avec le Conseil final ?</h2>
+          </div>
+
+          <p>
+            Ce tableau relance le backtest MPP avec plusieurs réglages du moteur de prédiction.
+            Il garde la stratégie <strong>Conseil final</strong> et compare directement les points gagnés.
+          </p>
+
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Réglage modèle</th>
+                  <th>Bons résultats</th>
+                  <th>Scores exacts</th>
+                  <th>Points gagnés</th>
+                  <th>Max possible</th>
+                  <th>Récupération</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {modelCalibrationRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.label}</strong>
+                    </td>
+                    <td>
+                      {row.summary
+                        ? `${row.summary.correctOutcomes} / ${row.summary.matches} · ${formatPercent(row.summary.correctOutcomeRate)}`
+                        : '-'}
+                    </td>
+                    <td>
+                      {row.summary
+                        ? `${row.summary.exactScores} / ${row.summary.matches} · ${formatPercent(row.summary.exactScoreRate)}`
+                        : '-'}
+                    </td>
+                    <td>
+                      <strong>{row.summary ? formatPoints(row.summary.pointsWon) : '-'}</strong>
+                    </td>
+                    <td>{row.summary ? formatPoints(row.summary.maxPossiblePoints) : '-'}</td>
+                    <td>{row.summary ? formatPercent(row.summary.captureRate) : '-'}</td>
+                    <td>{row.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {backtestResult && (
         <>
