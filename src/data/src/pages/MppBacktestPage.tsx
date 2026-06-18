@@ -7,7 +7,6 @@ import { runMppBacktest } from '../utils/mppBacktest';
 type MppBacktestPageProps = {
   matches: MatchResult[];
   settings: ModelSettings;
-  onSettingsChange?: (settings: ModelSettings) => void;
 };
 
 type FixtureLike = {
@@ -44,7 +43,6 @@ type MppModelCalibrationRow = {
   label: string;
   description: string;
   settingsPatch: Partial<ModelSettings>;
-  settings: ModelSettings;
   summary: MppBacktestResult['summaries'][number] | null;
 };
 
@@ -197,195 +195,6 @@ const MPP_MODEL_CALIBRATION_PRESETS: Array<{
     settingsPatch: {
       externalEloImpact: 0.65,
       internalEloImpact: 0.65,
-      smartDrawBoost: true,
-      drawMultiplier: 1.08,
-      lowScoreDrawBoost: 0.07,
-      drawBoostCloseMatch: 0.055,
-      drawBoostLowTotal: 0.04,
-      drawBoostMax: 1.25,
-      smartDrawMaxBoost: 1.25,
-      smartDrawFavoritePenalty: 0.8,
-    },
-  },
-  {
-    id: 'v3_mpp_prudent',
-    label: 'v3 MPP prudent',
-    description: 'Elo dynamique + modèle 1/N/2 séparé + recalibrage score exact, orienté points MPP.',
-    settingsPatch: {
-      scoreModel: 'ensemble_v3',
-      scoreTemperature: 1.08,
-      enableDynamicElo: true,
-      dynamicEloWeight: 0.5,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.58,
-      drawModelWeight: 0.62,
-      scoreOutcomeCalibrationWeight: 0.8,
-      advancedCompetitionWeights: true,
-      opponentEloAdjustmentWeight: 0.25,
-      dataConfidenceWeight: 0.95,
-      scoreCalibration: 'conservative',
-      favoriteControlWeight: 0.08,
-      smartDrawBoost: true,
-      drawMultiplier: 1.05,
-      lowScoreDrawBoost: 0.04,
-      drawBoostCloseMatch: 0.035,
-      drawBoostLowTotal: 0.025,
-      drawBoostMax: 1.16,
-      smartDrawMaxBoost: 1.16,
-      smartDrawFavoritePenalty: 0.85,
-    },
-  },
-  {
-    id: 'v3_mpp_result',
-    label: 'v3 MPP résultat fort',
-    description: 'Version v3 qui donne plus de poids au modèle 1/N/2 séparé.',
-    settingsPatch: {
-      scoreModel: 'hybrid_dc_bivariate',
-      scoreTemperature: 1.06,
-      enableDynamicElo: true,
-      dynamicEloWeight: 0.55,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.72,
-      drawModelWeight: 0.55,
-      scoreOutcomeCalibrationWeight: 0.9,
-      advancedCompetitionWeights: true,
-      opponentEloAdjustmentWeight: 0.25,
-      dataConfidenceWeight: 0.95,
-      scoreCalibration: 'conservative',
-      favoriteControlWeight: 0.08,
-      smartDrawBoost: true,
-      drawMultiplier: 1.05,
-      lowScoreDrawBoost: 0.04,
-      drawBoostCloseMatch: 0.035,
-      drawBoostLowTotal: 0.025,
-      drawBoostMax: 1.16,
-      smartDrawMaxBoost: 1.16,
-      smartDrawFavoritePenalty: 0.85,
-    },
-  },
-  {
-    id: 'v3_mpp_draw',
-    label: 'v3 MPP nuls contrôlés',
-    description: 'Version v3 avec modèle nul plus présent mais recalibrage plafonné.',
-    settingsPatch: {
-      scoreModel: 'ensemble_v3',
-      scoreTemperature: 1.1,
-      enableDynamicElo: true,
-      dynamicEloWeight: 0.5,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.55,
-      drawModelWeight: 0.8,
-      scoreOutcomeCalibrationWeight: 0.78,
-      advancedCompetitionWeights: true,
-      opponentEloAdjustmentWeight: 0.45,
-      dataConfidenceWeight: 1.15,
-      scoreCalibration: 'classic_top1',
-      favoriteControlWeight: 0.15,
-      smartDrawBoost: true,
-      drawMultiplier: 1.08,
-      lowScoreDrawBoost: 0.07,
-      drawBoostCloseMatch: 0.055,
-      drawBoostLowTotal: 0.04,
-      drawBoostMax: 1.25,
-      smartDrawMaxBoost: 1.25,
-      smartDrawFavoritePenalty: 0.8,
-    },
-  },
-
-  {
-    id: 'v31_mpp_bivariate_smart',
-    label: 'v3.1 MPP Bivariate + Smart Draw',
-    description: 'Part de Bivariate stable, garde Temp 1.10 et ajoute Smart Draw MPP sans forcer le modèle 1/N/2.',
-    settingsPatch: {
-      scoreModel: 'bivariate_poisson',
-      scoreTemperature: 1.1,
-      bivariateSharedLambda: 0.08,
-      bivariateBlendWeight: 1,
-      enableDynamicElo: false,
-      separateOutcomeModel: false,
-      outcomeModelWeight: 0,
-      drawModelWeight: 0,
-      scoreOutcomeCalibrationWeight: 0,
-      smartDrawBoost: true,
-      drawMultiplier: 1.1,
-      lowScoreDrawBoost: 0.09,
-      drawBoostCloseMatch: 0.065,
-      drawBoostLowTotal: 0.045,
-      drawBoostMax: 1.32,
-      smartDrawMaxBoost: 1.32,
-      smartDrawFavoritePenalty: 0.72,
-    },
-  },
-  {
-    id: 'v31_mpp_bivariate_draw_soft',
-    label: 'v3.1 MPP Bivariate + nul doux',
-    description: 'Même base Bivariate, mais avec modèle nul séparé très léger.',
-    settingsPatch: {
-      scoreModel: 'bivariate_poisson',
-      scoreTemperature: 1.08,
-      bivariateSharedLambda: 0.08,
-      bivariateBlendWeight: 1,
-      enableDynamicElo: false,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.04,
-      drawModelWeight: 0.18,
-      scoreOutcomeCalibrationWeight: 0.18,
-      smartDrawBoost: true,
-      drawMultiplier: 1.05,
-      lowScoreDrawBoost: 0.04,
-      drawBoostCloseMatch: 0.035,
-      drawBoostLowTotal: 0.025,
-      drawBoostMax: 1.16,
-      smartDrawMaxBoost: 1.16,
-      smartDrawFavoritePenalty: 0.85,
-    },
-  },
-  {
-    id: 'v31_mpp_result_smart_mix',
-    label: 'v3.1 MPP Résultat Smart mix',
-    description: 'Le meilleur preset résultat actuel avec une petite dose de modèle 1/N/2 séparé.',
-    settingsPatch: {
-      scoreModel: 'hybrid_dc_bivariate',
-      scoreTemperature: 1.08,
-      adaptiveDixonColes: true,
-      bivariateSharedLambda: 0.08,
-      bivariateBlendWeight: 0.25,
-      advancedCompetitionWeights: true,
-      opponentEloAdjustmentWeight: 0.25,
-      dataConfidenceWeight: 0.95,
-      scoreCalibration: 'conservative',
-      favoriteControlWeight: 0.08,
-      enableDynamicElo: true,
-      dynamicEloWeight: 0.25,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.16,
-      drawModelWeight: 0.18,
-      scoreOutcomeCalibrationWeight: 0.22,
-      smartDrawBoost: true,
-      drawMultiplier: 1.05,
-      lowScoreDrawBoost: 0.04,
-      drawBoostCloseMatch: 0.035,
-      drawBoostLowTotal: 0.025,
-      drawBoostMax: 1.16,
-      smartDrawMaxBoost: 1.16,
-      smartDrawFavoritePenalty: 0.85,
-    },
-  },
-  {
-    id: 'v31_mpp_draw_value_controlled',
-    label: 'v3.1 MPP value nuls contrôlés',
-    description: 'Cherche les nuls value MPP avec un recalibrage plafonné pour éviter la surcorrection.',
-    settingsPatch: {
-      scoreModel: 'hybrid_dc_bivariate',
-      scoreTemperature: 1.1,
-      adaptiveDixonColes: true,
-      bivariateSharedLambda: 0.08,
-      bivariateBlendWeight: 0.25,
-      enableDynamicElo: false,
-      separateOutcomeModel: true,
-      outcomeModelWeight: 0.1,
-      drawModelWeight: 0.36,
-      scoreOutcomeCalibrationWeight: 0.3,
       smartDrawBoost: true,
       drawMultiplier: 1.08,
       lowScoreDrawBoost: 0.07,
@@ -571,7 +380,7 @@ function getOutcomeHitClass(value: boolean): string {
   return value ? 'diagnostic-pill ok' : 'diagnostic-pill danger';
 }
 
-export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBacktestPageProps) {
+export function MppBacktestPage({ matches, settings }: MppBacktestPageProps) {
   const fixtures = worldCup2026Fixtures as FixtureLike[];
 
   const sortedFixtures = useMemo(() => {
@@ -724,21 +533,11 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
         label: preset.label,
         description: preset.description,
         settingsPatch: preset.settingsPatch,
-        settings: calibratedSettings,
         summary: recommendedSummary,
       };
     }).sort((a, b) => (b.summary?.pointsWon ?? 0) - (a.summary?.pointsWon ?? 0));
 
     setModelCalibrationRows(rows);
-  }
-
-  function handleApplyMppCalibration(row: MppModelCalibrationRow) {
-    if (!onSettingsChange) {
-      return;
-    }
-
-    onSettingsChange(row.settings);
-    alert(`Preset MPP appliqué : ${row.label}`);
   }
 
   function handleResetAll() {
@@ -997,7 +796,6 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
                   <th>Max possible</th>
                   <th>Récupération</th>
                   <th>Description</th>
-                  <th>Action</th>
                 </tr>
               </thead>
 
@@ -1023,16 +821,6 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
                     <td>{row.summary ? formatPoints(row.summary.maxPossiblePoints) : '-'}</td>
                     <td>{row.summary ? formatPercent(row.summary.captureRate) : '-'}</td>
                     <td>{row.description}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => handleApplyMppCalibration(row)}
-                        disabled={!onSettingsChange}
-                      >
-                        Appliquer
-                      </button>
-                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -253,7 +253,7 @@ export default function App() {
         )}
 
         {page === 'mppBacktest' && (
-          <MppBacktestPage matches={matches} settings={settings} onSettingsChange={setSettings} />
+          <MppBacktestPage matches={matches} settings={settings} />
         )}
       </main>
     </div>

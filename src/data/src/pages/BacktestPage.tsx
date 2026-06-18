@@ -5,7 +5,6 @@ import {
   createCalibrationSearchRow,
   formatOutcomeLabel,
   modelCalibrationCandidates,
-  v31AutoCalibrationCandidates,
   runBacktest,
   type BacktestOptions,
   type BacktestResult,
@@ -321,16 +320,6 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
   const [robustCalibrationResult, setRobustCalibrationResult] =
     useState<RobustCalibrationResult | null>(null);
 
-  const [robustCalibrationTitle, setRobustCalibrationTitle] = useState(
-    'Calibration robuste du modèle'
-  );
-  const [robustCalibrationSubtitle, setRobustCalibrationSubtitle] = useState(
-    'Comparer les coefficients sur 150, 300 et 500 matchs'
-  );
-  const [robustCalibrationIntro, setRobustCalibrationIntro] = useState(
-    'Cette vue évite de choisir un preset qui marche seulement sur une seule fenêtre. Chaque réglage est testé sur 150, 300 et 500 matchs.'
-  );
-
   const [calibrationProgress, setCalibrationProgress] =
     useState<CalibrationProgress | null>(null);
 
@@ -461,38 +450,29 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
     });
   }
 
-  async function runRobustCalibrationForCandidates(
-    candidates: ModelCalibrationCandidate[],
-    title: string,
-    subtitle: string,
-    intro: string,
-    progressLabel: string
-  ) {
+  async function handleRunRobustCalibrationSearch() {
     setIsCalibrating(true);
     setCalibrationResult(null);
     setRobustCalibrationResult(null);
     setAppliedCalibrationLabel(null);
-    setRobustCalibrationTitle(title);
-    setRobustCalibrationSubtitle(subtitle);
-    setRobustCalibrationIntro(intro);
 
     const windows = ROBUST_CALIBRATION_WINDOWS.map((maxMatches) => ({
       ...options,
       maxMatches,
     }));
-    const total = candidates.length * windows.length;
+    const total = modelCalibrationCandidates.length * windows.length;
     const robustRows: RobustCalibrationRow[] = [];
     let current = 0;
 
     setCalibrationProgress({
       current: 0,
       total,
-      currentLabel: progressLabel,
+      currentLabel: 'Préparation de la calibration robuste 150 / 300 / 500...',
     });
 
     await waitForUiUpdate();
 
-    for (const candidate of candidates) {
+    for (const candidate of modelCalibrationCandidates) {
       const calibratedSettings: ModelSettings = {
         ...settings,
         ...candidate.settingsPatch,
@@ -542,42 +522,44 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
     setCalibrationProgress({
       current: total,
       total,
-      currentLabel: 'Calibration terminée.',
+      currentLabel: 'Calibration robuste terminée.',
     });
   }
 
-  async function handleRunRobustCalibrationSearch() {
-    await runRobustCalibrationForCandidates(
-      modelCalibrationCandidates,
-      'Calibration robuste du modèle',
-      'Comparer les coefficients sur 150, 300 et 500 matchs',
-      'Cette vue évite de choisir un preset qui marche seulement sur une seule fenêtre. Chaque réglage est testé sur 150, 300 et 500 matchs.',
-      'Préparation de la calibration robuste 150 / 300 / 500...'
-    );
-  }
+  function applyCalibratedSettings(
+    nextSettings: ModelSettings,
+    label: string,
+    source: 'calibration' | 'robust_calibration'
+  ) {
+    if (!onSettingsChange) return;
 
-  async function handleRunV31AutoCalibrationSearch() {
-    await runRobustCalibrationForCandidates(
-      v31AutoCalibrationCandidates,
-      'Optimisation automatique v3.1',
-      'Tester les briques v3 séparément puis en petites combinaisons',
-      'Cette grille ne force plus la v3 complète. Elle teste automatiquement Elo dynamique, modèle nul, modèle 1/N/2 et recalibrage score avec des poids faibles à modérés, puis compare le tout sur 150, 300 et 500 matchs.',
-      'Préparation de l’optimisation automatique v3.1...'
-    );
+    const savedSettings: ModelSettings = {
+      ...nextSettings,
+      activePresetName: label,
+      activePresetAppliedAt: new Date().toISOString(),
+      activePresetSource: source,
+    };
+
+    onSettingsChange(savedSettings);
+    setAppliedCalibrationLabel(label);
+
+    // Très important pour l'UX : après un clic sur Appliquer, on relance
+    // immédiatement le backtest avec les nouveaux coefficients. Comme ça,
+    // l'utilisateur voit directement que le modèle actif a changé.
+    const result = runBacktest(matches, savedSettings, options);
+    setBacktestResult(result);
   }
 
   function handleApplyCalibration(row: CalibrationSearchRow) {
-    if (!onSettingsChange) return;
-
-    onSettingsChange(row.settings);
-    setAppliedCalibrationLabel(row.name);
+    applyCalibratedSettings(row.settings, row.name, 'calibration');
   }
 
   function handleApplyRobustCalibration(row: RobustCalibrationRow) {
-    if (!onSettingsChange) return;
-
-    onSettingsChange(row.settings);
-    setAppliedCalibrationLabel(`${row.name} · robuste`);
+    applyCalibratedSettings(
+      row.settings,
+      `${row.name} · robuste`,
+      'robust_calibration'
+    );
   }
 
 
@@ -705,18 +687,28 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
               ? `Robustesse en cours... ${progressPercent} %`
               : 'Tester robustesse 150 / 300 / 500'}
           </button>
-
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={handleRunV31AutoCalibrationSearch}
-            disabled={isRunning || isCalibrating}
-          >
-            {isCalibrating
-              ? `Optimisation en cours... ${progressPercent} %`
-              : 'Optimiser v3.1 automatiquement'}
-          </button>
         </div>
+
+        {(appliedCalibrationLabel || settings.activePresetName) && (
+          <div
+            className="card"
+            style={{
+              marginTop: '1rem',
+              padding: '1rem',
+              border: '1px solid rgba(34, 197, 94, 0.35)',
+              background: 'rgba(34, 197, 94, 0.08)',
+            }}
+          >
+            <p className="eyebrow">Preset modèle actif</p>
+            <h3 style={{ margin: '0.25rem 0' }}>
+              {appliedCalibrationLabel ?? settings.activePresetName}
+            </h3>
+            <p className="muted-text">
+              Ce preset est sauvegardé dans le navigateur. Après un clic sur Appliquer,
+              le backtest affiché en bas est relancé automatiquement avec les nouveaux coefficients.
+            </p>
+          </div>
+        )}
 
         {(isCalibrating || calibrationProgress) && (
           <div
@@ -772,8 +764,8 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
       {robustCalibrationResult && (
         <section className="card">
           <div className="section-title">
-            <p className="eyebrow">{robustCalibrationTitle}</p>
-            <h2>{robustCalibrationSubtitle}</h2>
+            <p className="eyebrow">Calibration robuste du modèle</p>
+            <h2>Comparer les coefficients sur 150, 300 et 500 matchs</h2>
           </div>
 
           <p>
@@ -904,7 +896,7 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
                           onClick={() => handleApplyRobustCalibration(row)}
                           disabled={!onSettingsChange}
                         >
-                          Appliquer
+                          Appliquer + relancer
                         </button>
                       </td>
                     </tr>
@@ -1040,7 +1032,7 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
                           onClick={() => handleApplyCalibration(row)}
                           disabled={!onSettingsChange}
                         >
-                          Appliquer
+                          Appliquer + relancer
                         </button>
                       </td>
                     </tr>

@@ -1,0 +1,656 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0d1117;
+  color: #edf2f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: radial-gradient(
+      circle at top left,
+      rgba(40, 124, 255, 0.16),
+      transparent 32rem
+    ),
+    radial-gradient(
+      circle at bottom right,
+      rgba(34, 197, 94, 0.12),
+      transparent 26rem
+    ),
+    #0d1117;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 1.4rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(13, 17, 23, 0.78);
+  backdrop-filter: blur(14px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 2rem;
+}
+
+.brand small {
+  display: block;
+  margin-top: 0.2rem;
+  color: #8b949e;
+}
+
+.logo-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #2563eb, #16a34a);
+  font-weight: 900;
+}
+
+nav {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.nav-button,
+.secondary-button {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: #edf2f7;
+  text-align: left;
+  transition: 0.18s ease;
+}
+
+.nav-button:hover,
+.secondary-button:hover,
+.nav-button.active {
+  border-color: rgba(59, 130, 246, 0.72);
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.main-content {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.4rem;
+}
+
+.topbar h1,
+.hero h1 {
+  margin: 0;
+  line-height: 1.05;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  color: #60a5fa;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.database-pill {
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c9d1d9;
+}
+
+.page-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 1.2rem;
+  background: rgba(22, 27, 34, 0.82);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+}
+
+.hero {
+  padding: 2rem;
+}
+
+.hero p {
+  max-width: 760px;
+  color: #c9d1d9;
+  font-size: 1.05rem;
+}
+
+.highlight-card {
+  background: linear-gradient(
+      135deg,
+      rgba(37, 99, 235, 0.22),
+      rgba(22, 163, 74, 0.14)
+    ),
+    rgba(22, 27, 34, 0.88);
+}
+
+.section-title {
+  margin-bottom: 1rem;
+}
+
+.section-title h2,
+.mini-card h3 {
+  margin: 0;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.two-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.three-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+  color: #c9d1d9;
+  font-weight: 700;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 0.75rem 0.85rem;
+  background: rgba(13, 17, 23, 0.78);
+  color: #edf2f7;
+}
+
+.inline-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #c9d1d9;
+}
+
+.expected-goals,
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.expected-goals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+
+.expected-goals div,
+.stats-grid div {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.expected-goals span,
+.stats-grid span {
+  display: block;
+  color: #8b949e;
+  font-size: 0.85rem;
+}
+
+.expected-goals strong,
+.stats-grid strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.25rem;
+}
+
+.main-score {
+  margin: 1rem 0;
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 560px;
+}
+
+th,
+td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.8rem;
+  text-align: left;
+}
+
+th {
+  color: #8b949e;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+.help-text,
+.mini-card p,
+.card p {
+  color: #c9d1d9;
+}
+
+.file-input {
+  display: inline-grid;
+  margin: 1rem 0;
+  border: 1px dashed rgba(96, 165, 250, 0.75);
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(37, 99, 235, 0.12);
+  color: #edf2f7;
+  font-weight: 800;
+}
+
+.file-input input {
+  margin-bottom: 0.65rem;
+}
+
+code {
+  border-radius: 8px;
+  padding: 0.1rem 0.3rem;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    display: block;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .main-content {
+    padding: 1rem;
+  }
+
+  .topbar,
+  .two-columns,
+  .three-columns,
+  .expected-goals,
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    display: grid;
+  }
+}
+
+.worldcup-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.worldcup-group-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.team-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.team-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.team-row span {
+  display: block;
+  margin-top: 0.2rem;
+  color: #8b949e;
+  font-size: 0.85rem;
+}
+
+.team-code {
+  min-width: 48px;
+  border-radius: 999px;
+  padding: 0.35rem 0.55rem;
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+  font-weight: 900;
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .worldcup-groups-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .worldcup-groups-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stats-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.worldcup-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.worldcup-group-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.team-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.team-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.team-row span {
+  display: block;
+  margin-top: 0.2rem;
+  color: #8b949e;
+  font-size: 0.85rem;
+}
+
+.team-code {
+  min-width: 48px;
+  border-radius: 999px;
+  padding: 0.35rem 0.55rem;
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+  font-weight: 900;
+  text-align: center;
+}
+
+.fixture-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.fixture-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 0.9rem;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.fixture-main {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.fixture-date {
+  color: #8b949e;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.fixture-teams {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.score-badge {
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  background: rgba(34, 197, 94, 0.16);
+  color: #bbf7d0;
+  font-weight: 900;
+}
+
+.score-badge.muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.fixture-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: #8b949e;
+  font-size: 0.82rem;
+}
+
+.fixture-meta span:not(:last-child)::after {
+  content: '·';
+  margin-left: 0.45rem;
+}
+
+.fixture-actions {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: 0.55rem;
+  min-width: 110px;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.status-pill.finished {
+  background: rgba(34, 197, 94, 0.16);
+  color: #bbf7d0;
+}
+
+.status-pill.scheduled {
+  background: rgba(96, 165, 250, 0.16);
+  color: #bfdbfe;
+}
+
+.status-pill.live {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fecaca;
+}
+
+.compact-button {
+  width: auto;
+  padding: 0.55rem 0.75rem;
+  text-align: center;
+}
+
+.warning-text {
+  margin-top: 0.8rem;
+  color: #fbbf24;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 980px) {
+  .stats-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .worldcup-groups-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .stats-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fixture-row {
+    display: grid;
+  }
+
+  .fixture-actions {
+    justify-items: stretch;
+  }
+
+  .compact-button {
+    width: 100%;
+  }
+}
+
+.import-status {
+  margin-top: 0.9rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(96, 165, 250, 0.12);
+  color: #bfdbfe;
+  font-weight: 700;
+}
+
+.diagnostic-summary {
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(96, 165, 250, 0.12);
+  color: #bfdbfe;
+  font-weight: 700;
+}
+
+.diagnostic-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.diagnostic-pill.ok {
+  background: rgba(34, 197, 94, 0.16);
+  color: #bbf7d0;
+}
+
+.diagnostic-pill.warning {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fde68a;
+}
+
+.diagnostic-pill.danger {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fecaca;
+}
+
+.muted-text {
+  color: #8b949e;
+}
+
+.prediction-date-warning {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+  font-weight: 700;
+}
+
+.warning-card {
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.warning-card strong {
+  color: #fde68a;
+}

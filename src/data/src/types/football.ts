@@ -109,7 +109,7 @@ export type ModelSettings = {
    * - bivariate_poisson : ajoute une corrélation entre les buts des deux équipes.
    * - hybrid_dc_bivariate : mélange Dixon-Coles et Bivariate Poisson.
    */
-  scoreModel?: 'independent_poisson' | 'dixon_coles' | 'bivariate_poisson' | 'hybrid_dc_bivariate' | 'ensemble_v3';
+  scoreModel?: 'independent_poisson' | 'dixon_coles' | 'bivariate_poisson' | 'hybrid_dc_bivariate';
 
   /**
    * Active l'adaptation automatique de rho selon le profil du match.
@@ -160,24 +160,21 @@ export type ModelSettings = {
    */
   favoriteControlWeight?: number;
 
-  /** Active un Elo dynamique recalculé chronologiquement à partir de l'historique. */
-  enableDynamicElo?: boolean;
+  /**
+   * Nom du preset appliqué depuis le backtest modèle. Sert uniquement à l'interface
+   * pour vérifier clairement quel réglage est actif.
+   */
+  activePresetName?: string;
 
-  /** Poids de l'Elo dynamique quand un Elo externe existe aussi. */
-  dynamicEloWeight?: number;
+  /**
+   * Date ISO de la dernière application d'un preset.
+   */
+  activePresetAppliedAt?: string;
 
-  /** Active un modèle 1/N/2 séparé de la distribution de scores exacts. */
-  separateOutcomeModel?: boolean;
-
-  /** Poids du modèle 1/N/2 séparé dans le recalibrage final. */
-  outcomeModelWeight?: number;
-
-  /** Poids spécifique du modèle de nul séparé. */
-  drawModelWeight?: number;
-
-  /** Intensité du recalibrage des scores exacts pour respecter le 1/N/2. */
-  scoreOutcomeCalibrationWeight?: number;
-
+  /**
+   * Origine du preset actif : calibration simple, robuste ou réglage manuel.
+   */
+  activePresetSource?: 'manual' | 'calibration' | 'robust_calibration';
 };
 
 export type PredictionContext = {

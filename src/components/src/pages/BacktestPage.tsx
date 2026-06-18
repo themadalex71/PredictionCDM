@@ -5,7 +5,6 @@ import {
   createCalibrationSearchRow,
   formatOutcomeLabel,
   modelCalibrationCandidates,
-  v31AutoCalibrationCandidates,
   runBacktest,
   type BacktestOptions,
   type BacktestResult,
@@ -321,16 +320,6 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
   const [robustCalibrationResult, setRobustCalibrationResult] =
     useState<RobustCalibrationResult | null>(null);
 
-  const [robustCalibrationTitle, setRobustCalibrationTitle] = useState(
-    'Calibration robuste du modèle'
-  );
-  const [robustCalibrationSubtitle, setRobustCalibrationSubtitle] = useState(
-    'Comparer les coefficients sur 150, 300 et 500 matchs'
-  );
-  const [robustCalibrationIntro, setRobustCalibrationIntro] = useState(
-    'Cette vue évite de choisir un preset qui marche seulement sur une seule fenêtre. Chaque réglage est testé sur 150, 300 et 500 matchs.'
-  );
-
   const [calibrationProgress, setCalibrationProgress] =
     useState<CalibrationProgress | null>(null);
 
@@ -461,38 +450,29 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
     });
   }
 
-  async function runRobustCalibrationForCandidates(
-    candidates: ModelCalibrationCandidate[],
-    title: string,
-    subtitle: string,
-    intro: string,
-    progressLabel: string
-  ) {
+  async function handleRunRobustCalibrationSearch() {
     setIsCalibrating(true);
     setCalibrationResult(null);
     setRobustCalibrationResult(null);
     setAppliedCalibrationLabel(null);
-    setRobustCalibrationTitle(title);
-    setRobustCalibrationSubtitle(subtitle);
-    setRobustCalibrationIntro(intro);
 
     const windows = ROBUST_CALIBRATION_WINDOWS.map((maxMatches) => ({
       ...options,
       maxMatches,
     }));
-    const total = candidates.length * windows.length;
+    const total = modelCalibrationCandidates.length * windows.length;
     const robustRows: RobustCalibrationRow[] = [];
     let current = 0;
 
     setCalibrationProgress({
       current: 0,
       total,
-      currentLabel: progressLabel,
+      currentLabel: 'Préparation de la calibration robuste 150 / 300 / 500...',
     });
 
     await waitForUiUpdate();
 
-    for (const candidate of candidates) {
+    for (const candidate of modelCalibrationCandidates) {
       const calibratedSettings: ModelSettings = {
         ...settings,
         ...candidate.settingsPatch,
@@ -542,28 +522,8 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
     setCalibrationProgress({
       current: total,
       total,
-      currentLabel: 'Calibration terminée.',
+      currentLabel: 'Calibration robuste terminée.',
     });
-  }
-
-  async function handleRunRobustCalibrationSearch() {
-    await runRobustCalibrationForCandidates(
-      modelCalibrationCandidates,
-      'Calibration robuste du modèle',
-      'Comparer les coefficients sur 150, 300 et 500 matchs',
-      'Cette vue évite de choisir un preset qui marche seulement sur une seule fenêtre. Chaque réglage est testé sur 150, 300 et 500 matchs.',
-      'Préparation de la calibration robuste 150 / 300 / 500...'
-    );
-  }
-
-  async function handleRunV31AutoCalibrationSearch() {
-    await runRobustCalibrationForCandidates(
-      v31AutoCalibrationCandidates,
-      'Optimisation automatique v3.1',
-      'Tester les briques v3 séparément puis en petites combinaisons',
-      'Cette grille ne force plus la v3 complète. Elle teste automatiquement Elo dynamique, modèle nul, modèle 1/N/2 et recalibrage score avec des poids faibles à modérés, puis compare le tout sur 150, 300 et 500 matchs.',
-      'Préparation de l’optimisation automatique v3.1...'
-    );
   }
 
   function handleApplyCalibration(row: CalibrationSearchRow) {
@@ -705,17 +665,6 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
               ? `Robustesse en cours... ${progressPercent} %`
               : 'Tester robustesse 150 / 300 / 500'}
           </button>
-
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={handleRunV31AutoCalibrationSearch}
-            disabled={isRunning || isCalibrating}
-          >
-            {isCalibrating
-              ? `Optimisation en cours... ${progressPercent} %`
-              : 'Optimiser v3.1 automatiquement'}
-          </button>
         </div>
 
         {(isCalibrating || calibrationProgress) && (
@@ -772,8 +721,8 @@ export function BacktestPage({ matches, settings, onSettingsChange }: BacktestPa
       {robustCalibrationResult && (
         <section className="card">
           <div className="section-title">
-            <p className="eyebrow">{robustCalibrationTitle}</p>
-            <h2>{robustCalibrationSubtitle}</h2>
+            <p className="eyebrow">Calibration robuste du modèle</p>
+            <h2>Comparer les coefficients sur 150, 300 et 500 matchs</h2>
           </div>
 
           <p>

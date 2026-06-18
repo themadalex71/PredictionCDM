@@ -7,21 +7,20 @@ import type {
 } from '../types/football';
 import { getEloComparison as getInternalEloComparison } from './eloModel';
 import { getExternalEloComparison, getExternalEloRating } from './externalEloModel';
-import { getDynamicEloComparison } from './dynamicEloModel';
 
 type ExpectedGoals = {
   teamA: number;
   teamB: number;
   eloDiff: number;
   eloConfidence: number;
-  eloSource: 'external' | 'internal' | 'dynamic' | 'blend';
+  eloSource: 'external' | 'internal';
   eloImpact: number;
 };
 
 type EloSignal = {
   ratingDiff: number;
   confidence: number;
-  source: 'external' | 'internal' | 'dynamic' | 'blend';
+  source: 'external' | 'internal';
   impact: number;
 };
 
@@ -60,8 +59,7 @@ type ScoreModelKind =
   | 'independent_poisson'
   | 'dixon_coles'
   | 'bivariate_poisson'
-  | 'hybrid_dc_bivariate'
-  | 'ensemble_v3';
+  | 'hybrid_dc_bivariate';
 
 type ScoreCalibrationKind =
   | 'none'
@@ -97,12 +95,6 @@ type CalibrationSettings = {
   dataConfidenceWeight: number;
   scoreCalibration: ScoreCalibrationKind;
   favoriteControlWeight: number;
-  enableDynamicElo: boolean;
-  dynamicEloWeight: number;
-  separateOutcomeModel: boolean;
-  outcomeModelWeight: number;
-  drawModelWeight: number;
-  scoreOutcomeCalibrationWeight: number;
 };
 
 const MIN_EXPECTED_GOALS = 0.12;
@@ -145,12 +137,6 @@ const DEFAULT_CALIBRATION: CalibrationSettings = {
   dataConfidenceWeight: 1.2,
   scoreCalibration: 'classic_top1',
   favoriteControlWeight: 0.18,
-  enableDynamicElo: false,
-  dynamicEloWeight: 0.45,
-  separateOutcomeModel: false,
-  outcomeModelWeight: 0.45,
-  drawModelWeight: 0.55,
-  scoreOutcomeCalibrationWeight: 0.7,
 };
 
 function getCalibration(settings: ModelSettings): CalibrationSettings {
@@ -206,18 +192,6 @@ function getCalibration(settings: ModelSettings): CalibrationSettings {
       settings.scoreCalibration ?? DEFAULT_CALIBRATION.scoreCalibration,
     favoriteControlWeight:
       settings.favoriteControlWeight ?? DEFAULT_CALIBRATION.favoriteControlWeight,
-    enableDynamicElo:
-      settings.enableDynamicElo ?? DEFAULT_CALIBRATION.enableDynamicElo,
-    dynamicEloWeight:
-      settings.dynamicEloWeight ?? DEFAULT_CALIBRATION.dynamicEloWeight,
-    separateOutcomeModel:
-      settings.separateOutcomeModel ?? DEFAULT_CALIBRATION.separateOutcomeModel,
-    outcomeModelWeight:
-      settings.outcomeModelWeight ?? DEFAULT_CALIBRATION.outcomeModelWeight,
-    drawModelWeight:
-      settings.drawModelWeight ?? DEFAULT_CALIBRATION.drawModelWeight,
-    scoreOutcomeCalibrationWeight:
-      settings.scoreOutcomeCalibrationWeight ?? DEFAULT_CALIBRATION.scoreOutcomeCalibrationWeight,
   };
 }
 
@@ -816,37 +790,6 @@ function getBestEloSignal(
 ): EloSignal {
   const calibration = getCalibration(settings);
   const externalComparison = getExternalEloComparison(teamA, teamB, context);
-  const dynamicComparison = calibration.enableDynamicElo
-    ? getDynamicEloComparison(teamA, teamB, matches, settings, context)
-    : null;
-
-  if (externalComparison && dynamicComparison) {
-    const dynamicWeight = clamp(calibration.dynamicEloWeight, 0, 1);
-    const externalWeight = 1 - dynamicWeight;
-
-    return {
-      ratingDiff:
-        externalComparison.ratingDiff * externalWeight +
-        dynamicComparison.ratingDiff * dynamicWeight,
-      confidence: clamp(
-        externalComparison.confidence * externalWeight +
-          dynamicComparison.confidence * dynamicWeight,
-        0,
-        1
-      ),
-      source: 'blend',
-      impact: clamp(calibration.externalEloImpact, 0, 2),
-    };
-  }
-
-  if (dynamicComparison) {
-    return {
-      ratingDiff: dynamicComparison.ratingDiff,
-      confidence: dynamicComparison.confidence,
-      source: 'dynamic',
-      impact: clamp(calibration.internalEloImpact, 0, 2),
-    };
-  }
 
   if (externalComparison) {
     return {
@@ -1645,212 +1588,12 @@ function getScoreProbability(
     return bivariateProbability;
   }
 
-  if (calibration.scoreModel === 'ensemble_v3') {
-    const hybridBivariateWeight = clamp(calibration.bivariateBlendWeight, 0, 1);
-    const hybridProbability =
-      dixonColesProbability * (1 - hybridBivariateWeight) +
-      bivariateProbability * hybridBivariateWeight;
-
-    return (
-      independentProbability * 0.18 +
-      dixonColesProbability * 0.30 +
-      bivariateProbability * 0.24 +
-      hybridProbability * 0.28
-    );
-  }
-
   const bivariateWeight = clamp(calibration.bivariateBlendWeight, 0, 1);
 
   return (
     dixonColesProbability * (1 - bivariateWeight) +
     bivariateProbability * bivariateWeight
   );
-}
-
-
-function sigmoid(value: number): number {
-  return 1 / (1 + Math.exp(-value));
-}
-
-function normalizeOutcomeProbabilities(outcomes: {
-  teamAWin: number;
-  draw: number;
-  teamBWin: number;
-  over15?: number;
-  over25?: number;
-  teamACleanSheet?: number;
-  teamBCleanSheet?: number;
-}) {
-  const teamAWin = Math.max(0, outcomes.teamAWin);
-  const draw = Math.max(0, outcomes.draw);
-  const teamBWin = Math.max(0, outcomes.teamBWin);
-  const total = teamAWin + draw + teamBWin;
-
-  if (total <= 0) {
-    return {
-      teamAWin: 1 / 3,
-      draw: 1 / 3,
-      teamBWin: 1 / 3,
-      over15: outcomes.over15 ?? 0,
-      over25: outcomes.over25 ?? 0,
-      teamACleanSheet: outcomes.teamACleanSheet ?? 0,
-      teamBCleanSheet: outcomes.teamBCleanSheet ?? 0,
-    };
-  }
-
-  return {
-    teamAWin: teamAWin / total,
-    draw: draw / total,
-    teamBWin: teamBWin / total,
-    over15: outcomes.over15 ?? 0,
-    over25: outcomes.over25 ?? 0,
-    teamACleanSheet: outcomes.teamACleanSheet ?? 0,
-    teamBCleanSheet: outcomes.teamBCleanSheet ?? 0,
-  };
-}
-
-function estimateSeparateDrawProbability(
-  expectedGoals: ExpectedGoals,
-  settings: ModelSettings,
-  context: PredictionContext
-): number {
-  const calibration = getCalibration(settings);
-  const xgDiff = Math.abs(expectedGoals.teamA - expectedGoals.teamB);
-  const xgTotal = expectedGoals.teamA + expectedGoals.teamB;
-  const effectiveEloDiff = Math.abs(expectedGoals.eloDiff) * expectedGoals.eloImpact;
-  const tournament = context.tournament?.toLowerCase() ?? '';
-
-  const closeness = clamp(1 - xgDiff / 1.05, 0, 1);
-  const lowTotal = clamp((2.85 - xgTotal) / 1.15, 0, 1);
-  const highTotal = clamp((xgTotal - 3.05) / 1.2, 0, 1);
-  const favoriteSignal = clamp(
-    0.58 * clamp((effectiveEloDiff - 100) / 260, 0, 1) +
-      0.42 * clamp((xgDiff - 0.35) / 1.05, 0, 1),
-    0,
-    1
-  );
-
-  let drawProbability =
-    0.205 +
-    0.105 * closeness +
-    0.055 * lowTotal -
-    0.105 * favoriteSignal -
-    0.045 * highTotal;
-
-  if (tournament.includes('world cup')) {
-    drawProbability += 0.018 * closeness;
-  }
-
-  const drawWeight = clamp(calibration.drawModelWeight, 0, 1.4);
-  drawProbability = 0.245 * (1 - drawWeight * 0.35) + drawProbability * (drawWeight * 0.35 + 0.65);
-
-  return clamp(drawProbability, 0.075, 0.39);
-}
-
-function estimateSeparateOutcomeProbabilities(
-  expectedGoals: ExpectedGoals,
-  settings: ModelSettings,
-  context: PredictionContext
-) {
-  const calibration = getCalibration(settings);
-  const drawProbability = estimateSeparateDrawProbability(expectedGoals, settings, context);
-  const goalDirection = expectedGoals.teamA - expectedGoals.teamB;
-  const eloDirection = (expectedGoals.eloDiff / 420) * expectedGoals.eloImpact * expectedGoals.eloConfidence;
-  const directionalSignal = goalDirection * 1.05 + eloDirection * 0.78;
-  const teamAConditionalWin = sigmoid(directionalSignal);
-  const nonDrawShare = 1 - drawProbability;
-
-  const raw = normalizeOutcomeProbabilities({
-    teamAWin: nonDrawShare * teamAConditionalWin,
-    draw: drawProbability,
-    teamBWin: nonDrawShare * (1 - teamAConditionalWin),
-  });
-
-  if (!calibration.separateOutcomeModel) {
-    return raw;
-  }
-
-  return raw;
-}
-
-function blendOutcomeTargets(
-  scoreOutcomes: ReturnType<typeof computeOutcomeProbabilities>,
-  separateOutcomes: ReturnType<typeof estimateSeparateOutcomeProbabilities>,
-  settings: ModelSettings
-) {
-  const calibration = getCalibration(settings);
-  const outcomeWeight = calibration.separateOutcomeModel
-    ? clamp(calibration.outcomeModelWeight, 0, 1)
-    : 0;
-  const drawWeight = calibration.separateOutcomeModel
-    ? clamp(calibration.drawModelWeight, 0, 1)
-    : 0;
-
-  const blendedDraw =
-    scoreOutcomes.draw * (1 - drawWeight) + separateOutcomes.draw * drawWeight;
-  const nonDrawScore = Math.max(0.000001, scoreOutcomes.teamAWin + scoreOutcomes.teamBWin);
-  const nonDrawSeparate = Math.max(0.000001, separateOutcomes.teamAWin + separateOutcomes.teamBWin);
-
-  const scoreTeamAShare = scoreOutcomes.teamAWin / nonDrawScore;
-  const separateTeamAShare = separateOutcomes.teamAWin / nonDrawSeparate;
-  const teamAShare =
-    scoreTeamAShare * (1 - outcomeWeight) + separateTeamAShare * outcomeWeight;
-  const nonDraw = 1 - blendedDraw;
-
-  return normalizeOutcomeProbabilities({
-    teamAWin: nonDraw * teamAShare,
-    draw: blendedDraw,
-    teamBWin: nonDraw * (1 - teamAShare),
-    over15: scoreOutcomes.over15,
-    over25: scoreOutcomes.over25,
-    teamACleanSheet: scoreOutcomes.teamACleanSheet,
-    teamBCleanSheet: scoreOutcomes.teamBCleanSheet,
-  });
-}
-
-function applyOutcomeRecalibration(
-  distribution: ScorePrediction[],
-  targetOutcomes: ReturnType<typeof computeOutcomeProbabilities>,
-  settings: ModelSettings
-): ScorePrediction[] {
-  const calibration = getCalibration(settings);
-  const weight = calibration.separateOutcomeModel
-    ? clamp(calibration.scoreOutcomeCalibrationWeight, 0, 1)
-    : 0;
-
-  if (weight <= 0) {
-    return distribution;
-  }
-
-  const currentOutcomes = computeOutcomeProbabilities(distribution);
-  const ratios = {
-    teamA: targetOutcomes.teamAWin / Math.max(currentOutcomes.teamAWin, 0.000001),
-    draw: targetOutcomes.draw / Math.max(currentOutcomes.draw, 0.000001),
-    teamB: targetOutcomes.teamBWin / Math.max(currentOutcomes.teamBWin, 0.000001),
-  };
-
-  const adjusted = distribution.map((score) => {
-    const outcome =
-      score.homeGoals > score.awayGoals
-        ? 'teamA'
-        : score.homeGoals < score.awayGoals
-          ? 'teamB'
-          : 'draw';
-
-    const ratio = ratios[outcome];
-
-    return {
-      ...score,
-      probability: score.probability * Math.pow(ratio, weight),
-    };
-  });
-
-  const total = adjusted.reduce((sum, score) => sum + score.probability, 0);
-
-  return adjusted.map((score) => ({
-    ...score,
-    probability: total > 0 ? score.probability / total : 0,
-  }));
 }
 
 export function predictScoreDistribution(
@@ -1902,28 +1645,15 @@ export function predictScoreDistribution(
     settings
   );
 
-  const scoreOutcomes = computeOutcomeProbabilities(temperatureAdjustedDistribution);
-  const separateOutcomes = estimateSeparateOutcomeProbabilities(
-    expectedGoals,
-    settings,
-    context
-  );
-  const targetOutcomes = blendOutcomeTargets(scoreOutcomes, separateOutcomes, settings);
-  const outcomeAdjustedDistribution = applyOutcomeRecalibration(
-    temperatureAdjustedDistribution,
-    targetOutcomes,
-    settings
-  );
-
-  const topScores = getTopScorePredictions(outcomeAdjustedDistribution, 5);
-  const outcomes = computeOutcomeProbabilities(outcomeAdjustedDistribution);
+  const topScores = getTopScorePredictions(temperatureAdjustedDistribution, 5);
+  const outcomes = computeOutcomeProbabilities(temperatureAdjustedDistribution);
 
   return {
     teamA,
     teamB,
     expectedGoalsA: expectedGoals.teamA,
     expectedGoalsB: expectedGoals.teamB,
-    distribution: outcomeAdjustedDistribution,
+    distribution: temperatureAdjustedDistribution,
     topScores,
     outcomes,
   };

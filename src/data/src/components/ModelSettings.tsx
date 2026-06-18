@@ -36,7 +36,14 @@ function NumberField({
 }
 
 export function ModelSettings({ settings, onChange }: ModelSettingsProps) {
-  const update = (patch: Partial<ModelSettingsType>) => onChange({ ...settings, ...patch });
+  const update = (patch: Partial<ModelSettingsType>) =>
+    onChange({
+      ...settings,
+      ...patch,
+      activePresetName: 'Réglage manuel',
+      activePresetAppliedAt: new Date().toISOString(),
+      activePresetSource: 'manual',
+    });
   const dixonColesEnabled = settings.useDixonColes ?? true;
 
   return (
@@ -44,6 +51,24 @@ export function ModelSettings({ settings, onChange }: ModelSettingsProps) {
       <div className="section-title">
         <p className="eyebrow">Modèle</p>
         <h2>Paramètres</h2>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          marginBottom: '1rem',
+          padding: '1rem',
+          background: 'rgba(255, 255, 255, 0.04)',
+        }}
+      >
+        <p className="eyebrow">Preset actif</p>
+        <h3 style={{ margin: '0.25rem 0' }}>
+          {settings.activePresetName ?? 'Aucun preset appliqué'}
+        </h3>
+        <p className="muted-text">
+          Si tu appliques un preset depuis le Backtest modèle, son nom doit apparaître ici.
+          Si tu modifies un champ à la main, le preset actif passe en “Réglage manuel”.
+        </p>
       </div>
 
       <div className="grid two-columns">
@@ -121,72 +146,6 @@ export function ModelSettings({ settings, onChange }: ModelSettingsProps) {
         Cette partie agit en amont du choix MPP : elle pondère mieux les compétitions, ajuste les performances
         selon le niveau Elo de l’adversaire, évite de sur-interpréter les équipes avec peu d’historique et
         applique une petite calibration aux scores classiques comme 1-0, 1-1 ou 2-1.
-      </p>
-
-      <div className="section-title" style={{ marginTop: '1.25rem' }}>
-        <p className="eyebrow">Moteur v3</p>
-        <h2>Elo dynamique, 1/N/2 séparé et recalibrage</h2>
-      </div>
-
-      <div className="grid two-columns">
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={settings.enableDynamicElo ?? false}
-            onChange={(event) => update({ enableDynamicElo: event.target.checked })}
-          />
-          Activer l’Elo dynamique historique recalculé match par match
-        </label>
-
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={settings.separateOutcomeModel ?? false}
-            onChange={(event) => update({ separateOutcomeModel: event.target.checked })}
-          />
-          Activer le modèle résultat 1/N/2 séparé du score exact
-        </label>
-
-        <NumberField
-          label="Poids Elo dynamique"
-          value={settings.dynamicEloWeight ?? 0.45}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(value) => update({ dynamicEloWeight: value })}
-        />
-
-        <NumberField
-          label="Poids modèle 1/N/2 séparé"
-          value={settings.outcomeModelWeight ?? 0.45}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(value) => update({ outcomeModelWeight: value })}
-        />
-
-        <NumberField
-          label="Poids modèle nul séparé"
-          value={settings.drawModelWeight ?? 0.55}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(value) => update({ drawModelWeight: value })}
-        />
-
-        <NumberField
-          label="Recalibrage score selon 1/N/2"
-          value={settings.scoreOutcomeCalibrationWeight ?? 0.7}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(value) => update({ scoreOutcomeCalibrationWeight: value })}
-        />
-      </div>
-
-      <p className="help-text">
-        Le moteur v3 ajoute un Elo chronologique, calcule le résultat victoire/nul/défaite séparément, puis
-        ajuste la distribution de scores exacts pour qu’elle reste cohérente avec cette probabilité 1/N/2.
       </p>
 
       <div className="section-title" style={{ marginTop: '1.25rem' }}>
@@ -293,7 +252,6 @@ export function ModelSettings({ settings, onChange }: ModelSettingsProps) {
           <option value="dixon_coles">Dixon-Coles pur</option>
           <option value="bivariate_poisson">Bivariate Poisson</option>
           <option value="hybrid_dc_bivariate">Hybride Dixon-Coles + Bivariate</option>
-          <option value="ensemble_v3">Ensemble v3</option>
         </select>
       </label>
 
@@ -372,7 +330,7 @@ export function ModelSettings({ settings, onChange }: ModelSettingsProps) {
 
       <p className="help-text">
         Version actuelle : Poisson renforcé avec forces offensives/défensives ajustées par adversaire, récence,
-        compétitions officielles, Elo, température, Dixon-Coles adaptatif, Bivariate Poisson et options v3.
+        compétitions officielles, Elo, température, Dixon-Coles adaptatif et Bivariate Poisson.
       </p>
     </section>
   );

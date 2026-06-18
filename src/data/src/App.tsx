@@ -70,13 +70,6 @@ const defaultSettings: ModelSettings = {
   dataConfidenceWeight: 1.2,
   scoreCalibration: 'classic_top1',
   favoriteControlWeight: 0.18,
-
-  enableDynamicElo: false,
-  dynamicEloWeight: 0.45,
-  separateOutcomeModel: false,
-  outcomeModelWeight: 0.45,
-  drawModelWeight: 0.55,
-  scoreOutcomeCalibrationWeight: 0.7,
 };
 
 const navItems: { id: Page; label: string }[] = [
@@ -90,11 +83,50 @@ const navItems: { id: Page; label: string }[] = [
   { id: 'mppBacktest', label: 'Backtest MPP' },
 ];
 
+const MODEL_SETTINGS_STORAGE_KEY = 'mpp-worldcup-model-settings-v2';
+
+function loadInitialSettings(): ModelSettings {
+  if (typeof window === 'undefined') {
+    return defaultSettings;
+  }
+
+  try {
+    const rawSettings = window.localStorage.getItem(MODEL_SETTINGS_STORAGE_KEY);
+
+    if (!rawSettings) {
+      return defaultSettings;
+    }
+
+    const parsedSettings = JSON.parse(rawSettings) as Partial<ModelSettings>;
+
+    return {
+      ...defaultSettings,
+      ...parsedSettings,
+    };
+  } catch (error) {
+    console.warn('Impossible de charger les paramètres modèle sauvegardés.', error);
+    return defaultSettings;
+  }
+}
+
+function saveModelSettings(settings: ModelSettings) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(
+      MODEL_SETTINGS_STORAGE_KEY,
+      JSON.stringify(settings)
+    );
+  } catch (error) {
+    console.warn('Impossible de sauvegarder les paramètres modèle.', error);
+  }
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [matches, setMatches] = useState<MatchResult[]>(sampleMatches);
   const [isDatabaseLoading, setIsDatabaseLoading] = useState(true);
-  const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
+  const [settings, setSettings] = useState<ModelSettings>(loadInitialSettings);
   const [selectedWorldCupMatch, setSelectedWorldCupMatch] =
     useState<WorldCupMatch | null>(null);
 
@@ -160,6 +192,11 @@ export default function App() {
 
   function resetToSample() {
     setMatches(sampleMatches);
+  }
+
+  function handleSettingsChange(nextSettings: ModelSettings) {
+    setSettings(nextSettings);
+    saveModelSettings(nextSettings);
   }
 
   function handlePredictWorldCupMatch(match: WorldCupMatch) {
@@ -235,11 +272,11 @@ export default function App() {
         )}
 
         {page === 'settings' && (
-          <SettingsPage settings={settings} onSettingsChange={setSettings} />
+          <SettingsPage settings={settings} onSettingsChange={handleSettingsChange} />
         )}
 
         {page === 'backtest' && (
-          <BacktestPage matches={matches} settings={settings} onSettingsChange={setSettings} />
+          <BacktestPage matches={matches} settings={settings} onSettingsChange={handleSettingsChange} />
         )}
 
         {page === 'mpp' && (
@@ -253,7 +290,7 @@ export default function App() {
         )}
 
         {page === 'mppBacktest' && (
-          <MppBacktestPage matches={matches} settings={settings} onSettingsChange={setSettings} />
+          <MppBacktestPage matches={matches} settings={settings} />
         )}
       </main>
     </div>
