@@ -11,6 +11,7 @@ import type {
   MppScoreAdvice,
 } from '../types/mpp';
 import { analyzeMppPrediction, getScoreOutcome } from './mppScoring';
+import { buildMppDecisionPlan } from './mppOptimizer';
 import { predictScoreDistribution } from './predictionModel';
 
 export type MppBacktestInput = {
@@ -44,7 +45,10 @@ export type MppBacktestStrategyId =
   | 'filtered_ev_50'
   | 'anti_underdog_ev_70'
   | 'anti_underdog_ev_90'
-  | 'anti_underdog_ev_110';
+  | 'anti_underdog_ev_110'
+  | 'v5_safe'
+  | 'v5_value'
+  | 'v5_league';
 
 export type MppBacktestStrategyResult = {
   strategyId: MppBacktestStrategyId;
@@ -132,6 +136,9 @@ const STRATEGY_IDS: MppBacktestStrategyId[] = [
   'anti_underdog_ev_70',
   'anti_underdog_ev_90',
   'anti_underdog_ev_110',
+  'v5_safe',
+  'v5_value',
+  'v5_league',
 ];
 
 const STRATEGY_LABELS: Record<MppBacktestStrategyId, string> = {
@@ -139,7 +146,7 @@ const STRATEGY_LABELS: Record<MppBacktestStrategyId, string> = {
   safest: 'Choix le plus sûr',
   best_expected: 'Meilleure espérance',
   upside: 'Score différenciant',
-  recommended: 'Conseil final',
+  recommended: 'Conseil recommandé v5',
 
   market_favorite: 'Favori MPP',
   consensus_70_30: 'Consensus modèle 70 / MPP 30',
@@ -152,6 +159,10 @@ const STRATEGY_LABELS: Record<MppBacktestStrategyId, string> = {
   anti_underdog_ev_70: 'EV anti-outsider favori ≤ 70 pts',
   anti_underdog_ev_90: 'EV anti-outsider favori ≤ 90 pts',
   anti_underdog_ev_110: 'EV anti-outsider favori ≤ 110 pts',
+
+  v5_safe: 'v5 Prono safe',
+  v5_value: 'v5 Choix value',
+  v5_league: 'v5 Pick ligue',
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -482,7 +493,7 @@ function getStrategyPick(
   }
 
   if (strategyId === 'recommended') {
-    return analysis.recommendedPick;
+    return buildMppDecisionPlan(analysis).finalPick.pick;
   }
 
   if (strategyId === 'market_favorite') {
@@ -521,7 +532,19 @@ function getStrategyPick(
     return getAntiUnderdogEvPick(analysis, 90);
   }
 
-  return getAntiUnderdogEvPick(analysis, 110);
+  if (strategyId === 'anti_underdog_ev_110') {
+    return getAntiUnderdogEvPick(analysis, 110);
+  }
+
+  if (strategyId === 'v5_safe') {
+    return buildMppDecisionPlan(analysis).safePick.pick;
+  }
+
+  if (strategyId === 'v5_value') {
+    return buildMppDecisionPlan(analysis).valuePick.pick;
+  }
+
+  return buildMppDecisionPlan(analysis).leaguePick.pick;
 }
 
 function scorePickAgainstActual(

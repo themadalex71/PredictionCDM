@@ -8,6 +8,8 @@ import type {
 import type { MppOdds, MppScoreAdvice } from '../types/mpp';
 import type { WorldCupMatch } from '../types/worldcup';
 import { analyzeMppPrediction } from '../utils/mppScoring';
+import type { MppDecisionPick } from '../utils/mppOptimizer';
+import { buildMppDecisionPlan } from '../utils/mppOptimizer';
 import type { MppRecordsByKey } from '../utils/mppWorldCupStorage';
 import {
   getMppRecordForFixture,
@@ -61,6 +63,40 @@ function getEdgeClass(edge: number | null): string {
   if (edge <= -0.04) return 'diagnostic-pill danger';
 
   return 'diagnostic-pill warning';
+}
+
+
+function DecisionPickCard({ decision }: { decision: MppDecisionPick }) {
+  const pick = decision.pick;
+
+  return (
+    <article className="card mini-card">
+      <p className="eyebrow">{decision.label}</p>
+      <h2>{pick.scoreLabel}</h2>
+      <p>
+        <span className={`diagnostic-pill ${decision.className}`}>
+          {decision.tag}
+        </span>{' '}
+        <span className={`diagnostic-pill ${decision.reliabilityClass}`}>
+          Fiabilité {decision.reliabilityScore}/100 · {decision.reliabilityLabel}
+        </span>
+      </p>
+      <p>
+        <strong>{pick.outcomeLabel}</strong>
+        <br />
+        Proba résultat : <strong>{formatPercent(pick.outcomeProbability)}</strong>
+        <br />
+        Proba score : <strong>{formatPercent(pick.exactProbability)}</strong>
+        <br />
+        EV : <strong>{formatNumber(pick.expectedPoints)} pts</strong>
+      </p>
+      <p className="muted-text">
+        {decision.explanation}
+        <br />
+        {decision.reliabilityExplanation}
+      </p>
+    </article>
+  );
 }
 
 function PickCard({ title, pick }: { title: string; pick?: MppScoreAdvice }) {
@@ -217,6 +253,14 @@ export function PredictionsPage({
     return analyzeMppPrediction(prediction, odds);
   }, [prediction, odds]);
 
+  const decisionPlan = useMemo(() => {
+    if (!analysis) {
+      return null;
+    }
+
+    return buildMppDecisionPlan(analysis);
+  }, [analysis]);
+
   const topRawScores = prediction?.topScores ?? [];
   const scoreAdvices = analysis?.scoreAdvices.slice(0, 18) ?? [];
 
@@ -327,21 +371,21 @@ export function PredictionsPage({
         </p>
       </section>
 
-      {prediction && analysis && (
+      {prediction && analysis && decisionPlan && (
         <>
           <section className="stats-summary-grid">
             <article className="card mini-card">
-              <p className="eyebrow">Conseil final</p>
-              <h2>{analysis.recommendedPick.scoreLabel}</h2>
+              <p className="eyebrow">Conseil recommandé v5</p>
+              <h2>{decisionPlan.finalPick.pick.scoreLabel}</h2>
               <p>
-                {analysis.recommendedPick.outcomeLabel}
+                {decisionPlan.finalPick.pick.outcomeLabel}
                 <br />
-                Espérance :{' '}
+                Fiabilité :{' '}
                 <strong>
-                  {formatNumber(analysis.recommendedPick.expectedPoints)} pts
+                  {decisionPlan.finalPick.reliabilityScore}/100 · {decisionPlan.finalPick.reliabilityLabel}
                 </strong>
                 <br />
-                {analysis.recommendedPick.riskLabel}
+                EV : <strong>{formatNumber(decisionPlan.finalPick.pick.expectedPoints)} pts</strong>
               </p>
             </article>
 
@@ -375,6 +419,40 @@ export function PredictionsPage({
             </article>
           </section>
 
+          <section className="card highlight-card">
+            <div className="section-title">
+              <p className="eyebrow">Optimiseur MPP v5</p>
+              <h2>Décision safe / value / ligue / x2</h2>
+            </div>
+
+            <p>
+              Lecture globale :{' '}
+              <span className={`diagnostic-pill ${decisionPlan.decisionClass}`}>
+                {decisionPlan.decisionLabel}
+              </span>{' '}
+              · Conseil recommandé : <strong>{decisionPlan.finalPick.pick.scoreLabel}</strong> · {decisionPlan.confidenceLabel} · {decisionPlan.volatilityLabel}.
+            </p>
+
+            <p className="muted-text">
+              {decisionPlan.finalReason}
+              <br />
+              {decisionPlan.matchReading}
+            </p>
+
+            {decisionPlan.warnings.length > 0 && (
+              <p className="import-status">
+                {decisionPlan.warnings.join(' · ')}
+              </p>
+            )}
+
+            <div className="stats-summary-grid">
+              <DecisionPickCard decision={decisionPlan.finalPick} />
+              <DecisionPickCard decision={decisionPlan.safePick} />
+              <DecisionPickCard decision={decisionPlan.valuePick} />
+              <DecisionPickCard decision={decisionPlan.x2ValuePick} />
+            </div>
+          </section>
+
           <section className="card">
             <div className="section-title">
               <p className="eyebrow">Lecture risque / rendement</p>
@@ -393,7 +471,20 @@ export function PredictionsPage({
                 title="Score différenciant"
                 pick={analysis.upsidePick}
               />
-              <PickCard title="Conseil final" pick={analysis.recommendedPick} />
+              <DecisionPickCard decision={decisionPlan.finalPick} />
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="section-title">
+              <p className="eyebrow">Bonus x2</p>
+              <h2>Trois façons de poser le x2</h2>
+            </div>
+
+            <div className="stats-summary-grid">
+              <DecisionPickCard decision={decisionPlan.x2SafePick} />
+              <DecisionPickCard decision={decisionPlan.x2ValuePick} />
+              <DecisionPickCard decision={decisionPlan.x2AggressivePick} />
             </div>
           </section>
 

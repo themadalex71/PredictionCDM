@@ -5,6 +5,8 @@ import type { MppBacktestInput, MppBacktestResult } from '../utils/mppBacktest';
 import { runMppBacktest } from '../utils/mppBacktest';
 import type { MppAnalysis, MppOdds, MppScoreAdvice } from '../types/mpp';
 import { analyzeMppPrediction } from '../utils/mppScoring';
+import type { MppDecisionPick, MppDecisionPlan } from '../utils/mppOptimizer';
+import { buildMppDecisionPlan } from '../utils/mppOptimizer';
 import { predictScoreDistribution } from '../utils/predictionModel';
 
 type MppBacktestPageProps = {
@@ -66,6 +68,7 @@ type RemainingProjectionRow = {
   safestPick: MppScoreAdvice;
   bestExpectedPick: MppScoreAdvice;
   upsidePick: MppScoreAdvice;
+  decisionPlan: MppDecisionPlan;
 };
 
 type RemainingProjectionResult = {
@@ -74,11 +77,18 @@ type RemainingProjectionResult = {
   alreadyWon: number;
   alreadyMatches: number;
   expectedTotal: number;
+  expectedSafeTotal: number;
+  expectedValueTotal: number;
+  expectedLeagueTotal: number;
   expectedWithBestX2: number;
+  expectedWithBestV5X2: number;
   potentialOutcomeOnlyTotal: number;
   potentialExactTotal: number;
   bestX2Row?: RemainingProjectionRow;
   safestX2Row?: RemainingProjectionRow;
+  bestV5SafeX2Row?: RemainingProjectionRow;
+  bestV5ValueX2Row?: RemainingProjectionRow;
+  bestV5AggressiveX2Row?: RemainingProjectionRow;
 };
 
 const STORAGE_KEY = 'mpp-worldcup-backtest-records-v1';
@@ -454,6 +464,36 @@ function formatPoints(value: number): string {
 function formatDecimal(value: number): string {
   return value.toFixed(2);
 }
+
+function formatReliability(decision: MppDecisionPick): string {
+  return `${decision.reliabilityScore}/100 · ${decision.reliabilityLabel}`;
+}
+
+function ProjectedPickCell({
+  decision,
+  compact = false,
+}: {
+  decision: MppDecisionPick;
+  compact?: boolean;
+}) {
+  const pick = decision.pick;
+
+  return (
+    <>
+      <strong>{pick.scoreLabel}</strong>
+      <br />
+      <span className={`diagnostic-pill ${decision.reliabilityClass}`}>
+        {formatReliability(decision)}
+      </span>
+      <br />
+      <span className="muted-text">
+        {pick.outcomeLabel} · {formatPercent(pick.outcomeProbability)}
+        {!compact ? ` · EV ${formatDecimal(pick.expectedPoints)} pts` : ''}
+      </span>
+    </>
+  );
+}
+
 
 function getFixtureKey(fixture: FixtureLike): string {
   return String(
@@ -890,8 +930,16 @@ export function MppBacktestPage({
 
     return [...(safeRows.length > 0 ? safeRows : rows)].sort(
       (a, b) =>
-        b.recommendedPick.expectedPoints - a.recommendedPick.expectedPoints
+        b.decisionPlan.finalPick.pick.expectedPoints -
+        a.decisionPlan.finalPick.pick.expectedPoints
     )[0];
+  }
+
+  function getBestV5X2Row(
+    rows: RemainingProjectionRow[],
+    selector: (row: RemainingProjectionRow) => number
+  ) {
+    return [...rows].sort((a, b) => selector(b) - selector(a))[0];
   }
 
   function handleProjectRemainingMatches() {
@@ -926,6 +974,7 @@ export function MppBacktestPage({
 
       const odds = getProjectionOdds(record);
       const analysis = analyzeMppPrediction(prediction, odds);
+      const decisionPlan = buildMppDecisionPlan(analysis);
 
       rows.push({
         matchKey: record.matchKey,
@@ -940,6 +989,7 @@ export function MppBacktestPage({
         safestPick: analysis.safestPick,
         bestExpectedPick: analysis.bestExpectedPick,
         upsidePick: analysis.upsidePick,
+        decisionPlan,
       });
     }
 
@@ -955,22 +1005,47 @@ export function MppBacktestPage({
 
     const alreadyWon = recommendedSummary?.pointsWon ?? 0;
     const expectedTotal = rows.reduce(
-      (sum, row) => sum + row.recommendedPick.expectedPoints,
+      (sum, row) => sum + row.decisionPlan.finalPick.pick.expectedPoints,
+      0
+    );
+    const expectedSafeTotal = rows.reduce(
+      (sum, row) => sum + row.decisionPlan.safePick.pick.expectedPoints,
+      0
+    );
+    const expectedValueTotal = rows.reduce(
+      (sum, row) => sum + row.decisionPlan.valuePick.pick.expectedPoints,
+      0
+    );
+    const expectedLeagueTotal = rows.reduce(
+      (sum, row) => sum + row.decisionPlan.leaguePick.pick.expectedPoints,
       0
     );
     const potentialOutcomeOnlyTotal = rows.reduce(
-      (sum, row) => sum + row.recommendedPick.outcomePoints,
+      (sum, row) => sum + row.decisionPlan.finalPick.pick.outcomePoints,
       0
     );
     const potentialExactTotal = rows.reduce(
-      (sum, row) => sum + row.recommendedPick.exactScoreTotalPoints,
+      (sum, row) => sum + row.decisionPlan.finalPick.pick.exactScoreTotalPoints,
       0
     );
     const bestX2Row = [...rows].sort(
       (a, b) =>
-        b.recommendedPick.expectedPoints - a.recommendedPick.expectedPoints
+        b.decisionPlan.finalPick.pick.expectedPoints -
+        a.decisionPlan.finalPick.pick.expectedPoints
     )[0];
     const safestX2Row = getBestSafeX2Row(rows);
+    const bestV5SafeX2Row = getBestV5X2Row(
+      rows,
+      (row) => row.decisionPlan.x2SafePick.score
+    );
+    const bestV5ValueX2Row = getBestV5X2Row(
+      rows,
+      (row) => row.decisionPlan.x2ValuePick.score
+    );
+    const bestV5AggressiveX2Row = getBestV5X2Row(
+      rows,
+      (row) => row.decisionPlan.x2AggressivePick.score
+    );
 
     setRemainingProjection({
       rows,
@@ -978,12 +1053,21 @@ export function MppBacktestPage({
       alreadyWon,
       alreadyMatches: completedInputs.length,
       expectedTotal,
+      expectedSafeTotal,
+      expectedValueTotal,
+      expectedLeagueTotal,
       expectedWithBestX2:
-        expectedTotal + (bestX2Row?.recommendedPick.expectedPoints ?? 0),
+        expectedTotal + (bestX2Row?.decisionPlan.finalPick.pick.expectedPoints ?? 0),
+      expectedWithBestV5X2:
+        expectedValueTotal +
+        (bestV5ValueX2Row?.decisionPlan.x2ValuePick.pick.expectedPoints ?? 0),
       potentialOutcomeOnlyTotal,
       potentialExactTotal,
       bestX2Row,
       safestX2Row,
+      bestV5SafeX2Row,
+      bestV5ValueX2Row,
+      bestV5AggressiveX2Row,
     });
   }
 
@@ -1198,8 +1282,8 @@ export function MppBacktestPage({
 
           <p>
             Cette simulation utilise les points MPP déjà saisis dans Backtest MPP,
-            ignore les matchs dont le score réel est renseigné, puis calcule le
-            conseil final sur tous les matchs restants.
+            ignore les matchs dont le score réel est renseigné, puis calcule un
+            conseil recommandé v5 unique, avec une option safe et une option value pour comprendre l’écart.
           </p>
 
           <div className="stats-summary-grid">
@@ -1211,18 +1295,24 @@ export function MppBacktestPage({
 
             <article className="card mini-card">
               <p className="eyebrow">Espérance restante</p>
-              <h2>{formatPoints(remainingProjection.expectedTotal)}</h2>
-              <p>{remainingProjection.rows.length} matchs simulés.</p>
+              <h2>{formatPoints(remainingProjection.expectedValueTotal)}</h2>
+              <p>Conseil recommandé v5 sur {remainingProjection.rows.length} matchs simulés.</p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Comparaison v5</p>
+              <h2>{formatPoints(remainingProjection.expectedSafeTotal)}</h2>
+              <p>Safe · Value {formatPoints(remainingProjection.expectedValueTotal)} · Ligue {formatPoints(remainingProjection.expectedLeagueTotal)}.</p>
             </article>
 
             <article className="card mini-card">
               <p className="eyebrow">Avec meilleur x2</p>
-              <h2>{formatPoints(remainingProjection.expectedWithBestX2)}</h2>
+              <h2>{formatPoints(remainingProjection.expectedWithBestV5X2)}</h2>
               <p>
                 Bonus conseillé :{' '}
                 <strong>
-                  {remainingProjection.bestX2Row
-                    ? `${remainingProjection.bestX2Row.homeTeam} - ${remainingProjection.bestX2Row.awayTeam}`
+                  {remainingProjection.bestV5ValueX2Row
+                    ? `${remainingProjection.bestV5ValueX2Row.homeTeam} - ${remainingProjection.bestV5ValueX2Row.awayTeam}`
                     : '-'}
                 </strong>
               </p>
@@ -1232,7 +1322,7 @@ export function MppBacktestPage({
               <p className="eyebrow">Potentiel si tout passe</p>
               <h2>{formatPoints(remainingProjection.potentialExactTotal)}</h2>
               <p>
-                Si tous les conseils finaux sortent en score exact. Résultat seul :{' '}
+                Si tous les conseils recommandés v5 sortent en score exact. Résultat seul :{' '}
                 {formatPoints(remainingProjection.potentialOutcomeOnlyTotal)}.
               </p>
             </article>
@@ -1245,9 +1335,40 @@ export function MppBacktestPage({
             </p>
           )}
 
+          {remainingProjection.bestV5ValueX2Row && (
+            <p className="import-status">
+              <strong>v5 x2 value conseillé :</strong>{' '}
+              {remainingProjection.bestV5ValueX2Row.homeTeam} - {remainingProjection.bestV5ValueX2Row.awayTeam}{' '}
+              sur le score{' '}
+              <strong>{remainingProjection.bestV5ValueX2Row.decisionPlan.x2ValuePick.pick.scoreLabel}</strong>{' '}
+              ({remainingProjection.bestV5ValueX2Row.decisionPlan.x2ValuePick.pick.outcomeLabel}) · EV bonus :{' '}
+              <strong>{formatDecimal(remainingProjection.bestV5ValueX2Row.decisionPlan.x2ValuePick.pick.expectedPoints)} pts</strong>.
+              {remainingProjection.bestV5SafeX2Row &&
+              remainingProjection.bestV5SafeX2Row.matchKey !== remainingProjection.bestV5ValueX2Row.matchKey ? (
+                <>
+                  {' '}Option plus prudente :{' '}
+                  <strong>
+                    {remainingProjection.bestV5SafeX2Row.homeTeam} - {remainingProjection.bestV5SafeX2Row.awayTeam}
+                  </strong>{' '}
+                  ({remainingProjection.bestV5SafeX2Row.decisionPlan.x2SafePick.pick.scoreLabel}).
+                </>
+              ) : null}
+              {remainingProjection.bestV5AggressiveX2Row &&
+              remainingProjection.bestV5AggressiveX2Row.matchKey !== remainingProjection.bestV5ValueX2Row.matchKey ? (
+                <>
+                  {' '}Option agressive :{' '}
+                  <strong>
+                    {remainingProjection.bestV5AggressiveX2Row.homeTeam} - {remainingProjection.bestV5AggressiveX2Row.awayTeam}
+                  </strong>{' '}
+                  ({remainingProjection.bestV5AggressiveX2Row.decisionPlan.x2AggressivePick.pick.scoreLabel}).
+                </>
+              ) : null}
+            </p>
+          )}
+
           {remainingProjection.bestX2Row && (
             <p className="import-status">
-              <strong>Meilleur x2 en espérance :</strong>{' '}
+              <strong>Ancien meilleur x2 en espérance :</strong>{' '}
               {remainingProjection.bestX2Row.homeTeam} - {remainingProjection.bestX2Row.awayTeam}{' '}
               sur le score{' '}
               <strong>{remainingProjection.bestX2Row.recommendedPick.scoreLabel}</strong>{' '}
@@ -1277,17 +1398,13 @@ export function MppBacktestPage({
                 <thead>
                   <tr>
                     <th>Match</th>
+                    <th>Confiance match</th>
                     <th>Points MPP</th>
-                    <th>Conseil final</th>
-                    <th>Résultat</th>
-                    <th>Proba résultat</th>
-                    <th>Proba score</th>
-                    <th>Points si résultat</th>
-                    <th>Points si exact</th>
-                    <th>EV</th>
-                    <th>Risque</th>
-                    <th>Meilleure espérance</th>
-                    <th>Différenciant</th>
+                    <th>Conseil recommandé</th>
+                    <th>Option safe</th>
+                    <th>Option value</th>
+                    <th>x2 conseillé</th>
+                    <th>Lecture rapide</th>
                   </tr>
                 </thead>
 
@@ -1304,23 +1421,50 @@ export function MppBacktestPage({
                         </span>
                       </td>
                       <td>
-                        {row.record.homeMppPoints} / {row.record.drawMppPoints} /{' '}
-                        {row.record.awayMppPoints}
+                        <span className={`diagnostic-pill ${row.decisionPlan.confidenceClass}`}>
+                          {Math.round(row.decisionPlan.confidenceScore * 100)}/100
+                        </span>
+                        <br />
+                        <span className="muted-text">
+                          {row.decisionPlan.confidenceLabel}
+                          <br />
+                          {row.decisionPlan.volatilityLabel}
+                        </span>
                       </td>
                       <td>
-                        <strong>{row.recommendedPick.scoreLabel}</strong>
+                        1 : {row.record.homeMppPoints}
+                        <br />
+                        N : {row.record.drawMppPoints}
+                        <br />
+                        2 : {row.record.awayMppPoints}
                       </td>
-                      <td>{row.recommendedPick.outcomeLabel}</td>
-                      <td>{formatPercent(row.recommendedPick.outcomeProbability)}</td>
-                      <td>{formatPercent(row.recommendedPick.exactProbability)}</td>
-                      <td>{formatPoints(row.recommendedPick.outcomePoints)}</td>
-                      <td>{formatPoints(row.recommendedPick.exactScoreTotalPoints)}</td>
                       <td>
-                        <strong>{formatDecimal(row.recommendedPick.expectedPoints)} pts</strong>
+                        <ProjectedPickCell decision={row.decisionPlan.finalPick} />
                       </td>
-                      <td>{row.recommendedPick.riskLabel}</td>
-                      <td>{row.bestExpectedPick.scoreLabel}</td>
-                      <td>{row.upsidePick.scoreLabel}</td>
+                      <td>
+                        <ProjectedPickCell decision={row.decisionPlan.safePick} />
+                      </td>
+                      <td>
+                        <ProjectedPickCell decision={row.decisionPlan.valuePick} />
+                      </td>
+                      <td>
+                        <ProjectedPickCell
+                          decision={row.decisionPlan.x2ValuePick}
+                          compact
+                        />
+                      </td>
+                      <td>
+                        <span className={`diagnostic-pill ${row.decisionPlan.decisionClass}`}>
+                          {row.decisionPlan.decisionLabel}
+                        </span>
+                        <br />
+                        <span className="muted-text">
+                          {row.decisionPlan.finalReason}
+                          {row.decisionPlan.warnings.length > 0
+                            ? ` · ${row.decisionPlan.warnings[0]}`
+                            : ''}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
