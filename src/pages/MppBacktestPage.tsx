@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { worldCup2026Fixtures } from '../data/worldcup2026/fixtures';
-import type { MatchResult, ModelSettings } from '../types/football';
+import type { MatchResult, ModelSettings, PredictionContext } from '../types/football';
 import type { MppBacktestInput, MppBacktestResult } from '../utils/mppBacktest';
 import { runMppBacktest } from '../utils/mppBacktest';
+import type { MppAnalysis, MppOdds, MppScoreAdvice } from '../types/mpp';
+import { analyzeMppPrediction } from '../utils/mppScoring';
+import { predictScoreDistribution } from '../utils/predictionModel';
 
 type MppBacktestPageProps = {
   matches: MatchResult[];
   settings: ModelSettings;
   onSettingsChange?: (settings: ModelSettings) => void;
+  records?: Record<string, EditableMppRecord>;
+  onRecordsChange?: (records: Record<string, EditableMppRecord>) => void;
 };
 
 type FixtureLike = {
@@ -46,6 +51,34 @@ type MppModelCalibrationRow = {
   settingsPatch: Partial<ModelSettings>;
   settings: ModelSettings;
   summary: MppBacktestResult['summaries'][number] | null;
+};
+
+type RemainingProjectionRow = {
+  matchKey: string;
+  date: string;
+  group?: string;
+  homeTeam: string;
+  awayTeam: string;
+  record: EditableMppRecord;
+  odds: MppOdds;
+  analysis: MppAnalysis;
+  recommendedPick: MppScoreAdvice;
+  safestPick: MppScoreAdvice;
+  bestExpectedPick: MppScoreAdvice;
+  upsidePick: MppScoreAdvice;
+};
+
+type RemainingProjectionResult = {
+  rows: RemainingProjectionRow[];
+  skippedWithoutOdds: number;
+  alreadyWon: number;
+  alreadyMatches: number;
+  expectedTotal: number;
+  expectedWithBestX2: number;
+  potentialOutcomeOnlyTotal: number;
+  potentialExactTotal: number;
+  bestX2Row?: RemainingProjectionRow;
+  safestX2Row?: RemainingProjectionRow;
 };
 
 const STORAGE_KEY = 'mpp-worldcup-backtest-records-v1';
@@ -400,6 +433,11 @@ const MPP_MODEL_CALIBRATION_PRESETS: Array<{
 
 function parseNumber(value: string): number {
   const normalized = value.replace(',', '.').trim();
+
+  if (normalized === '') {
+    return NaN;
+  }
+
   const parsed = Number(normalized);
 
   return Number.isFinite(parsed) ? parsed : NaN;
@@ -482,6 +520,27 @@ function saveStoredRecords(records: Record<string, EditableMppRecord>) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+function hasCompleteMppPoints(record: EditableMppRecord | undefined): boolean {
+  if (!record) return false;
+
+  return (
+    Number.isFinite(parseNumber(record.homeMppPoints)) &&
+    Number.isFinite(parseNumber(record.drawMppPoints)) &&
+    Number.isFinite(parseNumber(record.awayMppPoints))
+  );
+}
+
+function hasCompleteActualScore(record: EditableMppRecord | undefined): boolean {
+  if (!record) return false;
+
+  return (
+    record.actualHomeScore.trim() !== '' &&
+    record.actualAwayScore.trim() !== '' &&
+    Number.isFinite(parseNumber(record.actualHomeScore)) &&
+    Number.isFinite(parseNumber(record.actualAwayScore))
+  );
+}
+
 function isRecordStarted(record: EditableMppRecord | undefined): boolean {
   if (!record) return false;
 
@@ -495,13 +554,7 @@ function isRecordStarted(record: EditableMppRecord | undefined): boolean {
 }
 
 function isRecordComplete(record: EditableMppRecord): boolean {
-  return (
-    Number.isFinite(parseNumber(record.homeMppPoints)) &&
-    Number.isFinite(parseNumber(record.drawMppPoints)) &&
-    Number.isFinite(parseNumber(record.awayMppPoints)) &&
-    Number.isFinite(parseNumber(record.actualHomeScore)) &&
-    Number.isFinite(parseNumber(record.actualAwayScore))
-  );
+  return hasCompleteMppPoints(record) && hasCompleteActualScore(record);
 }
 
 function getRecordStatus(
@@ -571,7 +624,13 @@ function getOutcomeHitClass(value: boolean): string {
   return value ? 'diagnostic-pill ok' : 'diagnostic-pill danger';
 }
 
-export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBacktestPageProps) {
+export function MppBacktestPage({
+  matches,
+  settings,
+  onSettingsChange,
+  records: sharedRecords,
+  onRecordsChange,
+}: MppBacktestPageProps) {
   const fixtures = worldCup2026Fixtures as FixtureLike[];
 
   const sortedFixtures = useMemo(() => {
@@ -583,7 +642,9 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
     });
   }, [fixtures]);
 
-  const [records, setRecords] = useState<Record<string, EditableMppRecord>>({});
+  const [records, setRecordsState] = useState<Record<string, EditableMppRecord>>(
+    sharedRecords ?? {}
+  );
   const [selectedMatchKey, setSelectedMatchKey] = useState<string>(
     sortedFixtures[0] ? getFixtureKey(sortedFixtures[0]) : ''
   );
@@ -621,10 +682,17 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
 
   const [modelCalibrationRows, setModelCalibrationRows] =
     useState<MppModelCalibrationRow[]>([]);
+  const [remainingProjection, setRemainingProjection] =
+    useState<RemainingProjectionResult | null>(null);
 
   useEffect(() => {
-    setRecords(loadStoredRecords());
-  }, []);
+    if (sharedRecords) {
+      setRecordsState(sharedRecords);
+      return;
+    }
+
+    setRecordsState(loadStoredRecords());
+  }, [sharedRecords]);
 
   function updateSelectedRecord<K extends keyof EditableMppRecord>(
     key: K,
@@ -639,15 +707,20 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
       [key]: value,
     };
 
-    setRecords((previous) => ({
-      ...previous,
+    handleSaveRecords({
+      ...records,
       [nextRecord.matchKey]: nextRecord,
-    }));
+    });
   }
 
   function handleSaveRecords(nextRecords: Record<string, EditableMppRecord>) {
-    setRecords(nextRecords);
-    saveStoredRecords(nextRecords);
+    setRecordsState(nextRecords);
+
+    if (onRecordsChange) {
+      onRecordsChange(nextRecords);
+    } else {
+      saveStoredRecords(nextRecords);
+    }
   }
 
   function handleSaveSelectedRecord() {
@@ -751,8 +824,10 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
     }
 
     localStorage.removeItem(STORAGE_KEY);
-    setRecords({});
+    setRecordsState({});
+    onRecordsChange?.({});
     setBacktestResult(null);
+    setRemainingProjection(null);
   }
 
   function handleExportJson() {
@@ -782,6 +857,136 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
     }
   }
 
+
+  function recordHasFixtureScore(fixture: FixtureLike): boolean {
+    return Number.isFinite(fixture.homeScore) && Number.isFinite(fixture.awayScore);
+  }
+
+  function getProjectionOdds(record: EditableMppRecord): MppOdds {
+    return {
+      teamAWin: parseNumber(record.homeMppPoints),
+      draw: parseNumber(record.drawMppPoints),
+      teamBWin: parseNumber(record.awayMppPoints),
+    };
+  }
+
+  function buildProjectionContext(record: EditableMppRecord): PredictionContext {
+    return {
+      neutral: record.neutral,
+      teamAIsHome: true,
+      tournament: 'FIFA World Cup',
+      predictionDate: record.date,
+    };
+  }
+
+  function isRecordReadyForProjection(record: EditableMppRecord): boolean {
+    return hasCompleteMppPoints(record) && !hasCompleteActualScore(record);
+  }
+
+  function getBestSafeX2Row(rows: RemainingProjectionRow[]) {
+    const safeRows = rows.filter(
+      (row) => row.recommendedPick.outcomeProbability >= 0.42
+    );
+
+    return [...(safeRows.length > 0 ? safeRows : rows)].sort(
+      (a, b) =>
+        b.recommendedPick.expectedPoints - a.recommendedPick.expectedPoints
+    )[0];
+  }
+
+  function handleProjectRemainingMatches() {
+    const rows: RemainingProjectionRow[] = [];
+    let skippedWithoutOdds = 0;
+
+    for (const fixture of sortedFixtures) {
+      const key = getFixtureKey(fixture);
+      const record = records[key] ?? buildRecordFromFixture(fixture);
+
+      if (isRecordComplete(record) || recordHasFixtureScore(fixture)) {
+        continue;
+      }
+
+      if (!isRecordReadyForProjection(record)) {
+        skippedWithoutOdds += 1;
+        continue;
+      }
+
+      const projectionSettings: ModelSettings = {
+        ...settings,
+        maxGoals: Math.max(settings.maxGoals, 8),
+      };
+
+      const prediction = predictScoreDistribution(
+        record.homeTeam,
+        record.awayTeam,
+        matches,
+        projectionSettings,
+        buildProjectionContext(record)
+      );
+
+      const odds = getProjectionOdds(record);
+      const analysis = analyzeMppPrediction(prediction, odds);
+
+      rows.push({
+        matchKey: record.matchKey,
+        date: record.date,
+        group: record.group,
+        homeTeam: record.homeTeam,
+        awayTeam: record.awayTeam,
+        record,
+        odds,
+        analysis,
+        recommendedPick: analysis.recommendedPick,
+        safestPick: analysis.safestPick,
+        bestExpectedPick: analysis.bestExpectedPick,
+        upsidePick: analysis.upsidePick,
+      });
+    }
+
+    const completedInputs = completedRecords.map(convertRecordToInput);
+    const completedBacktest =
+      completedInputs.length > 0
+        ? runMppBacktest(completedInputs, matches, settings)
+        : null;
+
+    const recommendedSummary = completedBacktest?.summaries.find(
+      (summary) => summary.strategyId === 'recommended'
+    );
+
+    const alreadyWon = recommendedSummary?.pointsWon ?? 0;
+    const expectedTotal = rows.reduce(
+      (sum, row) => sum + row.recommendedPick.expectedPoints,
+      0
+    );
+    const potentialOutcomeOnlyTotal = rows.reduce(
+      (sum, row) => sum + row.recommendedPick.outcomePoints,
+      0
+    );
+    const potentialExactTotal = rows.reduce(
+      (sum, row) => sum + row.recommendedPick.exactScoreTotalPoints,
+      0
+    );
+    const bestX2Row = [...rows].sort(
+      (a, b) =>
+        b.recommendedPick.expectedPoints - a.recommendedPick.expectedPoints
+    )[0];
+    const safestX2Row = getBestSafeX2Row(rows);
+
+    setRemainingProjection({
+      rows,
+      skippedWithoutOdds,
+      alreadyWon,
+      alreadyMatches: completedInputs.length,
+      expectedTotal,
+      expectedWithBestX2:
+        expectedTotal + (bestX2Row?.recommendedPick.expectedPoints ?? 0),
+      potentialOutcomeOnlyTotal,
+      potentialExactTotal,
+      bestX2Row,
+      safestX2Row,
+    });
+  }
+
   return (
     <div className="page-stack">
       <section className="card hero">
@@ -795,9 +1000,10 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
         </p>
 
         <p>
-          Dans la liste des matchs : <strong>vert</strong> signifie complet et
-          prêt pour le backtest, <strong>orange</strong> signifie commencé mais
-          incomplet.
+          Dans la liste des matchs : <strong>vert</strong> signifie cotes +
+          score réel renseignés, donc match joué et prêt pour le backtest.
+          <strong>Orange</strong> signifie cotes renseignées mais score réel absent
+          ou saisie incomplète, donc match à venir/simulable.
         </p>
       </section>
 
@@ -871,7 +1077,7 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
                   onChange={(event) =>
                     updateSelectedRecord('actualHomeScore', event.target.value)
                   }
-                  placeholder="2"
+                  placeholder="vide si pas joué"
                 />
               </label>
 
@@ -882,7 +1088,7 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
                   onChange={(event) =>
                     updateSelectedRecord('actualAwayScore', event.target.value)
                   }
-                  placeholder="1"
+                  placeholder="vide si pas joué"
                 />
               </label>
             </div>
@@ -916,9 +1122,9 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
         )}
 
         <p className="import-status">
-          {completedRecords.length} matchs complets prêts pour le backtest.
+          {completedRecords.length} matchs joués prêts pour le backtest.
           {incompleteStartedRecords.length > 0
-            ? ` ${incompleteStartedRecords.length} matchs sont commencés mais incomplets.`
+            ? ` ${incompleteStartedRecords.length} matchs ont des cotes sans score réel complet : ils restent simulables.`
             : ''}
         </p>
       </section>
@@ -948,6 +1154,15 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
             Tester les réglages modèle sur MPP
           </button>
 
+
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={handleProjectRemainingMatches}
+          >
+            Simuler les matchs restants + bonus x2
+          </button>
+
           <button
             className="secondary-button"
             type="button"
@@ -973,6 +1188,147 @@ export function MppBacktestPage({ matches, settings, onSettingsChange }: MppBack
           </button>
         </div>
       </section>
+
+      {remainingProjection && (
+        <section className="card">
+          <div className="section-title">
+            <p className="eyebrow">Projection MPP</p>
+            <h2>Matchs restants et meilleur bonus x2</h2>
+          </div>
+
+          <p>
+            Cette simulation utilise les points MPP déjà saisis dans Backtest MPP,
+            ignore les matchs dont le score réel est renseigné, puis calcule le
+            conseil final sur tous les matchs restants.
+          </p>
+
+          <div className="stats-summary-grid">
+            <article className="card mini-card">
+              <p className="eyebrow">Déjà joués</p>
+              <h2>{formatPoints(remainingProjection.alreadyWon)}</h2>
+              <p>{remainingProjection.alreadyMatches} matchs complets dans le backtest.</p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Espérance restante</p>
+              <h2>{formatPoints(remainingProjection.expectedTotal)}</h2>
+              <p>{remainingProjection.rows.length} matchs simulés.</p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Avec meilleur x2</p>
+              <h2>{formatPoints(remainingProjection.expectedWithBestX2)}</h2>
+              <p>
+                Bonus conseillé :{' '}
+                <strong>
+                  {remainingProjection.bestX2Row
+                    ? `${remainingProjection.bestX2Row.homeTeam} - ${remainingProjection.bestX2Row.awayTeam}`
+                    : '-'}
+                </strong>
+              </p>
+            </article>
+
+            <article className="card mini-card">
+              <p className="eyebrow">Potentiel si tout passe</p>
+              <h2>{formatPoints(remainingProjection.potentialExactTotal)}</h2>
+              <p>
+                Si tous les conseils finaux sortent en score exact. Résultat seul :{' '}
+                {formatPoints(remainingProjection.potentialOutcomeOnlyTotal)}.
+              </p>
+            </article>
+          </div>
+
+          {remainingProjection.skippedWithoutOdds > 0 && (
+            <p className="import-status">
+              {remainingProjection.skippedWithoutOdds} matchs restants ignorés :
+              les points MPP ne sont pas encore saisis.
+            </p>
+          )}
+
+          {remainingProjection.bestX2Row && (
+            <p className="import-status">
+              <strong>Meilleur x2 en espérance :</strong>{' '}
+              {remainingProjection.bestX2Row.homeTeam} - {remainingProjection.bestX2Row.awayTeam}{' '}
+              sur le score{' '}
+              <strong>{remainingProjection.bestX2Row.recommendedPick.scoreLabel}</strong>{' '}
+              ({remainingProjection.bestX2Row.recommendedPick.outcomeLabel}) · EV bonus :{' '}
+              <strong>{formatDecimal(remainingProjection.bestX2Row.recommendedPick.expectedPoints)} pts</strong>.
+              {remainingProjection.safestX2Row &&
+              remainingProjection.safestX2Row.matchKey !== remainingProjection.bestX2Row.matchKey ? (
+                <>
+                  {' '}Option plus prudente :{' '}
+                  <strong>
+                    {remainingProjection.safestX2Row.homeTeam} - {remainingProjection.safestX2Row.awayTeam}
+                  </strong>{' '}
+                  ({remainingProjection.safestX2Row.recommendedPick.scoreLabel}).
+                </>
+              ) : null}
+            </p>
+          )}
+
+          {remainingProjection.rows.length === 0 ? (
+            <p className="import-status">
+              Aucun match restant simulable. Renseigne au moins les trois points MPP
+              d’un match non joué.
+            </p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Match</th>
+                    <th>Points MPP</th>
+                    <th>Conseil final</th>
+                    <th>Résultat</th>
+                    <th>Proba résultat</th>
+                    <th>Proba score</th>
+                    <th>Points si résultat</th>
+                    <th>Points si exact</th>
+                    <th>EV</th>
+                    <th>Risque</th>
+                    <th>Meilleure espérance</th>
+                    <th>Différenciant</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {remainingProjection.rows.map((row) => (
+                    <tr key={row.matchKey}>
+                      <td>
+                        <strong>
+                          {row.homeTeam} - {row.awayTeam}
+                        </strong>
+                        <br />
+                        <span className="muted-text">
+                          {row.date} · Groupe {row.group ?? '-'}
+                        </span>
+                      </td>
+                      <td>
+                        {row.record.homeMppPoints} / {row.record.drawMppPoints} /{' '}
+                        {row.record.awayMppPoints}
+                      </td>
+                      <td>
+                        <strong>{row.recommendedPick.scoreLabel}</strong>
+                      </td>
+                      <td>{row.recommendedPick.outcomeLabel}</td>
+                      <td>{formatPercent(row.recommendedPick.outcomeProbability)}</td>
+                      <td>{formatPercent(row.recommendedPick.exactProbability)}</td>
+                      <td>{formatPoints(row.recommendedPick.outcomePoints)}</td>
+                      <td>{formatPoints(row.recommendedPick.exactScoreTotalPoints)}</td>
+                      <td>
+                        <strong>{formatDecimal(row.recommendedPick.expectedPoints)} pts</strong>
+                      </td>
+                      <td>{row.recommendedPick.riskLabel}</td>
+                      <td>{row.bestExpectedPick.scoreLabel}</td>
+                      <td>{row.upsidePick.scoreLabel}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {modelCalibrationRows.length > 0 && (
         <section className="card">

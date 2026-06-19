@@ -15,6 +15,11 @@ import type {
 } from './types/football';
 import type { WorldCupMatch } from './types/worldcup';
 import { saveMatchesToLocalStorage } from './utils/csvParser';
+import type { MppRecordsByKey } from './utils/mppWorldCupStorage';
+import {
+  loadMppWorldCupRecords,
+  saveMppWorldCupRecords,
+} from './utils/mppWorldCupStorage';
 import {
   loadMatchesFromIndexedDb,
   saveMatchesToIndexedDb,
@@ -97,6 +102,7 @@ export default function App() {
   const [settings, setSettings] = useState<ModelSettings>(defaultSettings);
   const [selectedWorldCupMatch, setSelectedWorldCupMatch] =
     useState<WorldCupMatch | null>(null);
+  const [mppRecords, setMppRecords] = useState<MppRecordsByKey>({});
 
   const pageTitle = useMemo(
     () => navItems.find((item) => item.id === page)?.label ?? 'Accueil',
@@ -114,6 +120,10 @@ export default function App() {
     }),
     [selectedWorldCupMatch]
   );
+
+  useEffect(() => {
+    setMppRecords(loadMppWorldCupRecords());
+  }, []);
 
   useEffect(() => {
     async function loadStoredMatches() {
@@ -160,6 +170,11 @@ export default function App() {
 
   function resetToSample() {
     setMatches(sampleMatches);
+  }
+
+  function handleMppRecordsChange(nextRecords: MppRecordsByKey) {
+    setMppRecords(nextRecords);
+    saveMppWorldCupRecords(nextRecords);
   }
 
   function handlePredictWorldCupMatch(match: WorldCupMatch) {
@@ -213,7 +228,7 @@ export default function App() {
         {page === 'home' && <HomePage />}
 
         {page === 'worldcup' && (
-          <WorldCupPage onPredictMatch={handlePredictWorldCupMatch} />
+          <WorldCupPage onPredictMatch={handlePredictWorldCupMatch} mppRecords={mppRecords} />
         )}
 
         {page === 'database' && (
@@ -231,6 +246,9 @@ export default function App() {
             initialTeamA={selectedWorldCupMatch?.homeTeam}
             initialTeamB={selectedWorldCupMatch?.awayTeam}
             initialContext={initialPredictionContext}
+            initialWorldCupMatch={selectedWorldCupMatch ?? undefined}
+            mppRecords={mppRecords}
+            onMppRecordsChange={handleMppRecordsChange}
           />
         )}
 
@@ -249,11 +267,20 @@ export default function App() {
             initialTeamA={selectedWorldCupMatch?.homeTeam}
             initialTeamB={selectedWorldCupMatch?.awayTeam}
             initialContext={initialPredictionContext}
+            initialWorldCupMatch={selectedWorldCupMatch ?? undefined}
+            mppRecords={mppRecords}
+            onMppRecordsChange={handleMppRecordsChange}
           />
         )}
 
         {page === 'mppBacktest' && (
-          <MppBacktestPage matches={matches} settings={settings} onSettingsChange={setSettings} />
+          <MppBacktestPage
+            matches={matches}
+            settings={settings}
+            onSettingsChange={setSettings}
+            records={mppRecords}
+            onRecordsChange={handleMppRecordsChange}
+          />
         )}
       </main>
     </div>

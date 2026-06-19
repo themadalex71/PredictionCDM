@@ -6,7 +6,14 @@ import type {
   PredictionContext,
 } from '../types/football';
 import type { MppOdds, MppScoreAdvice } from '../types/mpp';
+import type { WorldCupMatch } from '../types/worldcup';
 import { analyzeMppPrediction } from '../utils/mppScoring';
+import type { MppRecordsByKey } from '../utils/mppWorldCupStorage';
+import {
+  getMppRecordForFixture,
+  hasMppPoints,
+  upsertMppRecordForFixture,
+} from '../utils/mppWorldCupStorage';
 import { predictScoreDistribution } from '../utils/predictionModel';
 
 type PredictionsPageProps = {
@@ -15,10 +22,18 @@ type PredictionsPageProps = {
   initialTeamA?: string;
   initialTeamB?: string;
   initialContext?: PredictionContext;
+  initialWorldCupMatch?: WorldCupMatch;
+  mppRecords?: MppRecordsByKey;
+  onMppRecordsChange?: (records: MppRecordsByKey) => void;
 };
 
 function parseDecimalInput(value: string): number {
   const normalized = value.replace(',', '.').trim();
+
+  if (normalized === '') {
+    return 0;
+  }
+
   const parsed = Number(normalized);
 
   return Number.isFinite(parsed) ? parsed : 0;
@@ -103,6 +118,9 @@ export function PredictionsPage({
   initialTeamA,
   initialTeamB,
   initialContext,
+  initialWorldCupMatch,
+  mppRecords = {},
+  onMppRecordsChange,
 }: PredictionsPageProps) {
   const [teamA, setTeamA] = useState(initialTeamA ?? 'France');
   const [teamB, setTeamB] = useState(initialTeamB ?? 'Senegal');
@@ -110,6 +128,24 @@ export function PredictionsPage({
   const [teamAOdds, setTeamAOdds] = useState('22');
   const [drawOdds, setDrawOdds] = useState('166');
   const [teamBOdds, setTeamBOdds] = useState('189');
+
+  function saveOddsForSelectedWorldCupMatch(patch: {
+    homeMppPoints?: string;
+    drawMppPoints?: string;
+    awayMppPoints?: string;
+  }) {
+    if (!initialWorldCupMatch || !onMppRecordsChange) {
+      return;
+    }
+
+    const nextRecords = upsertMppRecordForFixture(
+      mppRecords,
+      initialWorldCupMatch,
+      patch
+    );
+
+    onMppRecordsChange(nextRecords);
+  }
 
   useEffect(() => {
     if (initialTeamA) {
@@ -120,6 +156,25 @@ export function PredictionsPage({
       setTeamB(initialTeamB);
     }
   }, [initialTeamA, initialTeamB]);
+
+  useEffect(() => {
+    if (!initialWorldCupMatch) {
+      return;
+    }
+
+    const storedRecord = getMppRecordForFixture(
+      mppRecords,
+      initialWorldCupMatch
+    );
+
+    if (!hasMppPoints(storedRecord)) {
+      return;
+    }
+
+    setTeamAOdds(storedRecord!.homeMppPoints);
+    setDrawOdds(storedRecord!.drawMppPoints);
+    setTeamBOdds(storedRecord!.awayMppPoints);
+  }, [initialWorldCupMatch, mppRecords]);
 
   const context: PredictionContext = useMemo(
     () => ({
@@ -219,7 +274,12 @@ export function PredictionsPage({
             Points MPP si victoire {teamA || 'équipe A'}
             <input
               value={teamAOdds}
-              onChange={(event) => setTeamAOdds(event.target.value)}
+              onChange={(event) => {
+                setTeamAOdds(event.target.value);
+                saveOddsForSelectedWorldCupMatch({
+                  homeMppPoints: event.target.value,
+                });
+              }}
               placeholder="22"
             />
           </label>
@@ -228,7 +288,12 @@ export function PredictionsPage({
             Points MPP si match nul
             <input
               value={drawOdds}
-              onChange={(event) => setDrawOdds(event.target.value)}
+              onChange={(event) => {
+                setDrawOdds(event.target.value);
+                saveOddsForSelectedWorldCupMatch({
+                  drawMppPoints: event.target.value,
+                });
+              }}
               placeholder="166"
             />
           </label>
@@ -237,11 +302,22 @@ export function PredictionsPage({
             Points MPP si victoire {teamB || 'équipe B'}
             <input
               value={teamBOdds}
-              onChange={(event) => setTeamBOdds(event.target.value)}
+              onChange={(event) => {
+                setTeamBOdds(event.target.value);
+                saveOddsForSelectedWorldCupMatch({
+                  awayMppPoints: event.target.value,
+                });
+              }}
               placeholder="189"
             />
           </label>
         </div>
+
+        {initialWorldCupMatch && hasMppPoints(getMppRecordForFixture(mppRecords, initialWorldCupMatch)) && (
+          <p className="import-status">
+            Points MPP préremplis depuis Backtest MPP et sauvegardés automatiquement.
+          </p>
+        )}
 
         <p className="import-status">
           Barème utilisé : si tu trouves le bon résultat, tu gagnes les points

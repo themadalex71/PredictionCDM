@@ -2,9 +2,17 @@ import { useMemo, useState } from 'react';
 import { worldCup2026Fixtures } from '../data/worldcup2026/fixtures';
 import { worldCup2026Teams } from '../data/worldcup2026/teams';
 import type { WorldCupMatch } from '../types/worldcup';
+import type { MppRecordsByKey } from '../utils/mppWorldCupStorage';
+import {
+  getMppRecordForFixture,
+  hasActualScore,
+  hasMppPoints,
+  parseMppNumber,
+} from '../utils/mppWorldCupStorage';
 
 type WorldCupPageProps = {
   onPredictMatch: (match: WorldCupMatch) => void;
+  mppRecords?: MppRecordsByKey;
 };
 
 type DisplayMode = 'groups' | 'dates';
@@ -75,12 +83,36 @@ function getMatchKey(match: MatchView): string {
   );
 }
 
-function hasMatchScore(match: MatchView): boolean {
-  return Number.isFinite(match.homeScore) && Number.isFinite(match.awayScore);
+function hasMatchScore(match: MatchView, mppRecords?: MppRecordsByKey): boolean {
+  const record = mppRecords ? getMppRecordForFixture(mppRecords, match) : undefined;
+
+  return hasActualScore(record) || (Number.isFinite(match.homeScore) && Number.isFinite(match.awayScore));
 }
 
-function getMatchStatusLabel(match: MatchView): string {
-  if (hasMatchScore(match)) {
+function getDisplayedScore(match: MatchView, mppRecords?: MppRecordsByKey) {
+  const record = mppRecords ? getMppRecordForFixture(mppRecords, match) : undefined;
+
+  if (hasActualScore(record)) {
+    return {
+      home: parseMppNumber(record!.actualHomeScore),
+      away: parseMppNumber(record!.actualAwayScore),
+      source: 'saisie MPP',
+    };
+  }
+
+  if (Number.isFinite(match.homeScore) && Number.isFinite(match.awayScore)) {
+    return {
+      home: match.homeScore as number,
+      away: match.awayScore as number,
+      source: 'calendrier',
+    };
+  }
+
+  return null;
+}
+
+function getMatchStatusLabel(match: MatchView, mppRecords?: MppRecordsByKey): string {
+  if (hasMatchScore(match, mppRecords)) {
     return 'Joué';
   }
 
@@ -95,8 +127,8 @@ function getMatchStatusLabel(match: MatchView): string {
   return 'À venir';
 }
 
-function getMatchStatusClass(match: MatchView): string {
-  return hasMatchScore(match)
+function getMatchStatusClass(match: MatchView, mppRecords?: MppRecordsByKey): string {
+  return hasMatchScore(match, mppRecords)
     ? 'diagnostic-pill ok'
     : 'diagnostic-pill warning';
 }
@@ -130,11 +162,15 @@ function groupMatchesByDate(matches: MatchView[]) {
 function MatchCard({
   match,
   onPredictMatch,
+  mppRecords,
 }: {
   match: MatchView;
   onPredictMatch: (match: WorldCupMatch) => void;
+  mppRecords?: MppRecordsByKey;
 }) {
-  const scoreIsKnown = hasMatchScore(match);
+  const score = getDisplayedScore(match, mppRecords);
+  const scoreIsKnown = score !== null;
+  const record = mppRecords ? getMppRecordForFixture(mppRecords, match) : undefined;
   const time = getMatchTime(match);
 
   return (
@@ -159,8 +195,8 @@ function MatchCard({
           </h2>
         </div>
 
-        <span className={getMatchStatusClass(match)}>
-          {getMatchStatusLabel(match)}
+        <span className={getMatchStatusClass(match, mppRecords)}>
+          {getMatchStatusLabel(match, mppRecords)}
         </span>
       </div>
 
@@ -168,11 +204,21 @@ function MatchCard({
         <p>
           Score :{' '}
           <strong>
-            {match.homeScore} - {match.awayScore}
+            {score?.home} - {score?.away}
           </strong>
         </p>
       ) : (
         <p className="muted-text">Match non joué.</p>
+      )}
+
+      {score?.source === 'saisie MPP' && (
+        <p className="muted-text">Score repris depuis Backtest MPP.</p>
+      )}
+
+      {hasMppPoints(record) && (
+        <p className="import-status">
+          Points MPP : {record!.homeMppPoints} / {record!.drawMppPoints} / {record!.awayMppPoints}
+        </p>
       )}
 
       {(match.venue || match.city) && (
@@ -199,10 +245,12 @@ function GroupView({
   teams,
   fixtures,
   onPredictMatch,
+  mppRecords,
 }: {
   teams: TeamView[];
   fixtures: MatchView[];
   onPredictMatch: (match: WorldCupMatch) => void;
+  mppRecords?: MppRecordsByKey;
 }) {
   return (
     <div className="page-stack">
@@ -245,6 +293,7 @@ function GroupView({
                   key={getMatchKey(match)}
                   match={match}
                   onPredictMatch={onPredictMatch}
+                  mppRecords={mppRecords}
                 />
               ))}
             </div>
@@ -258,9 +307,11 @@ function GroupView({
 function DateView({
   fixtures,
   onPredictMatch,
+  mppRecords,
 }: {
   fixtures: MatchView[];
   onPredictMatch: (match: WorldCupMatch) => void;
+  mppRecords?: MppRecordsByKey;
 }) {
   const dateGroups = groupMatchesByDate(fixtures);
 
@@ -279,6 +330,7 @@ function DateView({
                 key={getMatchKey(match)}
                 match={match}
                 onPredictMatch={onPredictMatch}
+                mppRecords={mppRecords}
               />
             ))}
           </div>
@@ -288,7 +340,7 @@ function DateView({
   );
 }
 
-export function WorldCupPage({ onPredictMatch }: WorldCupPageProps) {
+export function WorldCupPage({ onPredictMatch, mppRecords }: WorldCupPageProps) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>('groups');
 
   const teams = worldCup2026Teams as TeamView[];
@@ -296,8 +348,8 @@ export function WorldCupPage({ onPredictMatch }: WorldCupPageProps) {
 
   const totalMatches = fixtures.length;
   const playedMatches = useMemo(
-    () => fixtures.filter((match) => hasMatchScore(match)).length,
-    [fixtures]
+    () => fixtures.filter((match) => hasMatchScore(match, mppRecords)).length,
+    [fixtures, mppRecords]
   );
 
   const upcomingMatches = totalMatches - playedMatches;
@@ -355,9 +407,10 @@ export function WorldCupPage({ onPredictMatch }: WorldCupPageProps) {
           teams={teams}
           fixtures={fixtures}
           onPredictMatch={onPredictMatch}
+          mppRecords={mppRecords}
         />
       ) : (
-        <DateView fixtures={fixtures} onPredictMatch={onPredictMatch} />
+        <DateView fixtures={fixtures} onPredictMatch={onPredictMatch} mppRecords={mppRecords} />
       )}
     </div>
   );
